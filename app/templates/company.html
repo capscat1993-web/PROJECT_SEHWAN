@@ -113,6 +113,7 @@ async function loadCompany() {
       <span>👤 대표: ${companyData.representatives || '-'}</span>
       <span>🏢 사업자번호: ${companyData.biz_no || '-'}</span>
       <span>📅 보고일: ${companyData.report_date || '-'}</span>
+      ${companyData.industry ? `<span>🏭 업종: ${companyData.industry}</span>` : ''}
     </div>
   `;
 
@@ -215,7 +216,9 @@ async function loadOverview() {
           <tr class="border-b"><td class="py-2 text-gray-500 w-32">회사명</td><td class="py-2 font-medium">${companyData.company_name}</td></tr>
           <tr class="border-b"><td class="py-2 text-gray-500">대표자</td><td class="py-2">${companyData.representatives || '-'}</td></tr>
           <tr class="border-b"><td class="py-2 text-gray-500">사업자번호</td><td class="py-2">${companyData.biz_no || '-'}</td></tr>
-          <tr><td class="py-2 text-gray-500">보고일</td><td class="py-2">${companyData.report_date || '-'}</td></tr>
+          <tr class="border-b"><td class="py-2 text-gray-500">보고일</td><td class="py-2">${companyData.report_date || '-'}</td></tr>
+          <tr class="border-b"><td class="py-2 text-gray-500">업종</td><td class="py-2">${companyData.industry || '-'}</td></tr>
+          <tr><td class="py-2 text-gray-500">주요제품</td><td class="py-2">${companyData.main_product || '-'}</td></tr>
         </table>
       </div>
       <div class="bg-white rounded-lg border border-gray-200 p-6">
@@ -264,9 +267,13 @@ async function loadFinancial() {
   // 복합 바 차트 그리기
   drawIncomeChart(chartData);
 
-  // 섹션 탭 버튼 생성
+  // 섹션 탭 버튼 생성 (지정된 4개 항목만 표시)
+  const ALLOWED_SECTIONS = ['손익계산서', '재무상태표', '자본변동표', '현금흐름분석', '현금흐름지표'];
+  const filteredSections = sections.filter(s => ALLOWED_SECTIONS.includes(s));
+  const displaySections = filteredSections.length > 0 ? filteredSections : sections;
+
   const tabsEl = document.getElementById('sectionTabs');
-  sections.forEach((s, i) => {
+  displaySections.forEach((s, i) => {
     const btn = document.createElement('button');
     btn.textContent = s;
     btn.dataset.section = s;
@@ -283,7 +290,7 @@ async function loadFinancial() {
     tabsEl.appendChild(btn);
   });
 
-  if (sections.length > 0) loadTable(sections[0]);
+  if (displaySections.length > 0) loadTable(displaySections[0]);
 }
 
 let incomeChart = null;
@@ -355,6 +362,43 @@ function drawIncomeChart(data) {
   });
 }
 
+// ─── 섹션별 그룹 헤더 정의 ──────────────────────────────
+const SECTION_GROUPS = {
+  '재무상태표': [
+    { label: '자산', color: 'bg-orange-50 text-orange-700 border-orange-200', trigger: m => /유동자산/.test(m) && !/비유동/.test(m) },
+    { label: '부채', color: 'bg-red-50 text-red-700 border-red-200',    trigger: m => /유동부채/.test(m) && !/비유동/.test(m) },
+    { label: '자본', color: 'bg-blue-50 text-blue-700 border-blue-200', trigger: m => /^자본금$|납입자본/.test(m) },
+  ],
+  '현금흐름분석': [
+    { label: '영업활동',             color: 'bg-green-50 text-green-700 border-green-200',  trigger: m => /영업활동\s*현금흐름/.test(m) },
+    { label: '투자·재무활동 (유출)', color: 'bg-red-50 text-red-700 border-red-200',       trigger: m => /투자.재무활동\s*현금유출/.test(m) },
+    { label: '투자·재무활동 (유입)', color: 'bg-blue-50 text-blue-700 border-blue-200',    trigger: m => /투자.재무활동\s*현금유입/.test(m) },
+    { label: '현금 변동',            color: 'bg-gray-100 text-gray-700 border-gray-300',   trigger: m => /현금증감액/.test(m) },
+  ],
+};
+
+// 재무상태표 접기/펼치기 부모 행 정의
+const BS_COLLAPSIBLE = [
+  {
+    key: 'bs_유동자산',
+    test: m => /^유동자산$/.test(m.trim()),
+    stopAt: m => /비유동자산|자산총계/.test(m),
+  },
+  {
+    key: 'bs_비유동자산',
+    test: m => /^비유동자산$/.test(m.trim()),
+    stopAt: m => /자산총계|유동부채|부채총계/.test(m),
+  },
+];
+
+function toggleCollapse(key) {
+  const rows = document.querySelectorAll(`tr[data-parent="${key}"]`);
+  const btn = document.querySelector(`button[data-toggle="${key}"]`);
+  const isCollapsed = rows.length > 0 && rows[0].classList.contains('hidden');
+  rows.forEach(r => r.classList.toggle('hidden', !isCollapsed));
+  if (btn) btn.textContent = isCollapsed ? '▼' : '▶';
+}
+
 async function loadTable(section) {
   const container = document.getElementById('tableContainer');
   container.innerHTML = '<div class="text-center py-8 text-gray-400">로딩 중...</div>';
@@ -368,9 +412,27 @@ async function loadTable(section) {
   }
 
   const periods = data.periods;
-  // 단위 표기 업데이트
   const unitEl = document.getElementById('tableUnit');
   if (unitEl) unitEl.textContent = data.unit ? `단위: ${data.unit}` : '';
+
+  // 재무상태표: 접기/펼치기 부모-자식 관계 태깅
+  const isBS = section === '재무상태표';
+  let currentParent = null;
+  const taggedRows = data.rows.map(row => {
+    if (!isBS) return { ...row, _role: 'normal' };
+    const m = row.metric.trim();
+    const parentDef = BS_COLLAPSIBLE.find(p => p.test(m));
+    if (parentDef) {
+      currentParent = parentDef;
+      return { ...row, _role: 'parent', _key: parentDef.key };
+    }
+    if (currentParent && currentParent.stopAt(m)) currentParent = null;
+    if (currentParent) return { ...row, _role: 'child', _key: currentParent.key };
+    return { ...row, _role: 'normal' };
+  });
+
+  const groups = SECTION_GROUPS[section] || [];
+  let currentGroup = null;
 
   let html = `<table class="w-full text-sm border-collapse">
     <thead>
@@ -380,12 +442,42 @@ async function loadTable(section) {
       </tr>
     </thead><tbody>`;
 
-  data.rows.forEach((row, i) => {
-    const isTotal = /총계|합계|소계/.test(row.metric);
-    const rowBg = isTotal ? 'bg-blue-50/40' : (i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50');
+  taggedRows.forEach((row, i) => {
+    const m = row.metric;
+    const mNorm = m.replace(/\s+/g, '');
+    const isTotal = /총계|합계|소계/.test(mNorm);
+
+    // 그룹 헤더 삽입
+    const matchedGroup = groups.find(g => g.trigger(m));
+    if (matchedGroup && matchedGroup !== currentGroup) {
+      currentGroup = matchedGroup;
+      const colSpan = periods.length + 1;
+      html += `<tr class="border-b-2 border-t border-gray-200">
+        <td colspan="${colSpan}" class="py-2 px-3 ${matchedGroup.color} border-l-4 font-semibold text-xs tracking-wide">
+          ${matchedGroup.label} <span class="font-normal opacity-60">[개요]</span>
+        </td>
+      </tr>`;
+    }
+
+    const isChild  = row._role === 'child';
+    const isParent = row._role === 'parent';
+    const rowBg    = isTotal ? 'bg-blue-50/50' : (isChild ? 'bg-gray-50/60' : (i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'));
     const fontClass = isTotal ? 'font-semibold text-gray-900' : 'text-gray-700';
-    html += `<tr class="${rowBg} hover:bg-blue-50/30 border-b border-gray-100">
-      <td class="py-1.5 px-3 sticky left-0 ${rowBg} ${fontClass}">${row.metric}</td>`;
+    const indent    = isChild ? 'pl-10' : ((!isTotal && currentGroup) ? 'pl-6' : 'px-3');
+    const trAttrs   = isChild ? `data-parent="${row._key}"` : '';
+    const hiddenCls = isChild ? 'hidden' : '';
+
+    // 부모 행: 토글 버튼 포함
+    let metricCell;
+    if (isParent) {
+      metricCell = `<button onclick="toggleCollapse('${row._key}')" data-toggle="${row._key}"
+        class="mr-1.5 w-4 h-4 inline-flex items-center justify-center text-orange-500 hover:text-orange-700 text-xs">▶</button>${m}`;
+    } else {
+      metricCell = (isChild ? '<span class="mr-1.5 text-gray-300 text-xs">└</span>' : '') + m;
+    }
+
+    html += `<tr ${trAttrs} class="${hiddenCls} ${rowBg} hover:bg-blue-50/30 border-b border-gray-100">
+      <td class="py-1.5 ${indent} sticky left-0 ${rowBg} ${fontClass}">${metricCell}</td>`;
     periods.forEach(p => {
       const val = row.values[p];
       const numColor = val?.num < 0 ? 'text-red-500' : '';
