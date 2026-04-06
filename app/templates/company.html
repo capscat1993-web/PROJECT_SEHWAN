@@ -1,0 +1,538 @@
+{% extends "base.html" %}
+{% block title %}기업 상세{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <!-- Back -->
+  <a href="/" class="inline-flex items-center text-sm text-gray-500 hover:text-blue-600 mb-4">← 목록으로</a>
+
+  <!-- Company header -->
+  <div id="companyHeader" class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+    <div class="animate-pulse space-y-2">
+      <div class="h-7 bg-gray-200 rounded w-48"></div>
+      <div class="h-4 bg-gray-100 rounded w-72"></div>
+    </div>
+  </div>
+
+  <!-- ★ 핵심 지표 카드 3종 -->
+  <div id="keyMetricsSection" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6"></div>
+
+  <!-- Tabs -->
+  <div class="border-b border-gray-200 mb-6">
+    <nav class="flex gap-6 -mb-px" id="tabs">
+      <button onclick="switchTab('overview')" data-tab="overview" class="py-2 text-sm tab-active">기업 개요</button>
+      <button onclick="switchTab('financial')" data-tab="financial" class="py-2 text-sm text-gray-500 hover:text-gray-700">재무제표</button>
+      <button onclick="switchTab('health')" data-tab="health" class="py-2 text-sm text-gray-500 hover:text-gray-700">재무건전성</button>
+      <button onclick="switchTab('chat')" data-tab="chat" class="py-2 text-sm text-gray-500 hover:text-gray-700">AI 분석</button>
+    </nav>
+  </div>
+
+  <div id="tab-overview" class="tab-content"></div>
+  <div id="tab-financial" class="tab-content hidden"></div>
+  <div id="tab-health" class="tab-content hidden"></div>
+  <div id="tab-chat" class="tab-content hidden"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const CID = {{ company_id }};
+let companyData = null;
+let healthData = null;
+let radarChart = null;
+let keyBarCharts = {};
+
+// ─── 유틸 ───────────────────────────────────────────────
+function fmtNum(v) {
+  if (v === null || v === undefined) return '-';
+  return Number(v).toLocaleString('ko-KR');
+}
+function pctChange(prev, cur) {
+  if (!prev || !cur || prev === 0) return null;
+  return ((cur - prev) / Math.abs(prev) * 100).toFixed(2);
+}
+function badgeColor(pct) {
+  if (pct === null) return '';
+  return pct >= 0 ? 'text-red-500' : 'text-blue-500';
+}
+function fmtKorean(rawNum, unitStr) {
+  if (rawNum === null || rawNum === undefined) return '-';
+  const sign = rawNum < 0 ? '-' : '';
+  const abs = Math.abs(rawNum);
+  const u = (unitStr || '').trim();
+  let wonAbs = abs;
+  if (u.includes('천원')) wonAbs = abs * 1_000;
+  else if (u.includes('백만원') || u.includes('백만')) wonAbs = abs * 1_000_000;
+  else if (u.includes('억원') || u.includes('억')) wonAbs = abs * 100_000_000;
+  const JO = 1_000_000_000_000, EOK = 100_000_000, MAN = 10_000;
+  if (wonAbs >= JO) {
+    const jo = Math.floor(wonAbs / JO);
+    const eok = Math.floor((wonAbs % JO) / EOK);
+    return eok > 0 ? `${sign}${jo.toLocaleString()}조 ${eok.toLocaleString()}억` : `${sign}${jo.toLocaleString()}조`;
+  } else if (wonAbs >= EOK) {
+    const eok = Math.floor(wonAbs / EOK);
+    const man = Math.floor((wonAbs % EOK) / MAN);
+    return man > 0 ? `${sign}${eok.toLocaleString()}억 ${man.toLocaleString()}만` : `${sign}${eok.toLocaleString()}억`;
+  } else if (wonAbs >= MAN) {
+    return `${sign}${Math.floor(wonAbs / MAN).toLocaleString()}만`;
+  } else {
+    return `${sign}${fmtNum(rawNum)}`;
+  }
+}
+
+// ─── 탭 전환 ────────────────────────────────────────────
+function switchTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+  document.getElementById('tab-' + tab).classList.remove('hidden');
+  document.querySelectorAll('#tabs button').forEach(btn => {
+    btn.classList.remove('tab-active');
+    btn.classList.add('text-gray-500');
+  });
+  const active = document.querySelector(`[data-tab="${tab}"]`);
+  active.classList.add('tab-active');
+  active.classList.remove('text-gray-500');
+
+  if (tab === 'financial' && !document.getElementById('tab-financial').dataset.loaded) loadFinancial();
+  if (tab === 'health' && !document.getElementById('tab-health').dataset.loaded) loadHealth();
+  if (tab === 'chat' && !document.getElementById('tab-chat').dataset.loaded) initChat();
+}
+
+// ─── 회사 헤더 + 기업 개요 + 핵심 지표 카드 ────────────
+async function loadCompany() {
+  const [compRes, kmRes] = await Promise.all([
+    fetch(`/api/companies/${CID}`),
+    fetch(`/api/companies/${CID}/key_metrics`),
+  ]);
+  companyData = await compRes.json();
+  const km = await kmRes.json();
+
+  // 헤더
+  document.getElementById('companyHeader').innerHTML = `
+    <h1 class="text-2xl font-bold text-gray-900 mb-2">${companyData.company_name}</h1>
+    <div class="flex flex-wrap gap-4 text-sm text-gray-600">
+      <span>👤 대표: ${companyData.representatives || '-'}</span>
+      <span>🏢 사업자번호: ${companyData.biz_no || '-'}</span>
+      <span>📅 보고일: ${companyData.report_date || '-'}</span>
+    </div>
+  `;
+
+  // 핵심 지표 카드
+  const metricColors = {
+    '매출액':     { bar: '#4CAF50', label: 'text-green-600' },
+    '영업이익':   { bar: '#FF7043', label: 'text-orange-500' },
+    '당기순이익': { bar: '#7C3AED', label: 'text-purple-600' },
+  };
+
+  const section = document.getElementById('keyMetricsSection');
+  section.innerHTML = '';
+
+  for (const [name, data] of Object.entries(km.metrics)) {
+    const periods = km.periods.filter(p => data[p] !== null && data[p] !== undefined);
+    if (periods.length === 0) continue;
+
+    const latest = periods[periods.length - 1];
+    const prev   = periods.length >= 2 ? periods[periods.length - 2] : null;
+    const latestVal = data[latest];
+    const pct = prev ? pctChange(data[prev], latestVal) : null;
+    const color = metricColors[name] || { bar: '#3B82F6', label: 'text-blue-600' };
+    const unitLabel = km.unit ? `(${km.unit})` : '';
+
+    const korVal = fmtKorean(latestVal, km.unit);
+    const prevVal = prev ? data[prev] : null;
+    const prevKorVal = prev ? fmtKorean(prevVal, km.unit) : null;
+    const pctColor = pct !== null ? (pct >= 0 ? 'text-red-500' : 'text-blue-500') : '';
+    const pctSign = pct !== null && pct >= 0 ? '+' : '';
+
+    const card = document.createElement('div');
+    card.className = 'bg-white rounded-lg border border-gray-200 p-5';
+    card.innerHTML = `
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-base font-semibold text-gray-700">${name}</span>
+        <span class="text-xs text-gray-400">${latest} 기준</span>
+      </div>
+      <div class="mb-1 text-xs text-gray-500">
+        <span class="font-medium text-gray-700">${latest} ${name}</span>
+        ${prev ? `&nbsp;&nbsp;<span class="text-gray-400">${prev} 대비</span>
+        ${pct !== null ? `<span class="font-semibold ${pctColor} ml-1">${pctSign}${pct}%</span>` : ''}` : ''}
+      </div>
+      <div class="text-2xl font-bold ${color.label} mb-3">${korVal}</div>
+      <canvas id="kmChart_${name}" height="90"></canvas>
+    `;
+    section.appendChild(card);
+
+    // 미니 바 차트
+    setTimeout(() => {
+      const ctx = document.getElementById(`kmChart_${name}`).getContext('2d');
+      if (keyBarCharts[name]) keyBarCharts[name].destroy();
+      keyBarCharts[name] = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: periods,
+          datasets: [{
+            data: periods.map(p => data[p]),
+            backgroundColor: periods.map((p, i) =>
+              i === periods.length - 1 ? color.bar : color.bar + '88'
+            ),
+            borderRadius: 3,
+            borderSkipped: false,
+          }]
+        },
+        options: {
+          layout: { padding: { top: 20 } },
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: c => fmtNum(c.raw) + (km.unit ? ` (${km.unit})` : '') } },
+            datalabels: {
+              anchor: 'end', align: 'end',
+              color: ctx => ctx.dataIndex === periods.length - 1 ? color.bar : '#666',
+              font: { size: 9, weight: 'bold' },
+              formatter: v => v === null ? '' : fmtKorean(v, km.unit),
+            },
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { size: 9 } } },
+            y: { display: false },
+          },
+          animation: { duration: 500 },
+        },
+        plugins: [ChartDataLabels],
+      });
+    }, 50);
+  }
+
+  // 기업 개요 탭
+  loadOverview();
+}
+
+async function loadOverview() {
+  const secRes = await fetch(`/api/companies/${CID}/sections`);
+  const sections = await secRes.json();
+  document.getElementById('tab-overview').innerHTML = `
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div class="bg-white rounded-lg border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold mb-4">기업 기본 정보</h2>
+        <table class="w-full text-sm">
+          <tr class="border-b"><td class="py-2 text-gray-500 w-32">회사명</td><td class="py-2 font-medium">${companyData.company_name}</td></tr>
+          <tr class="border-b"><td class="py-2 text-gray-500">대표자</td><td class="py-2">${companyData.representatives || '-'}</td></tr>
+          <tr class="border-b"><td class="py-2 text-gray-500">사업자번호</td><td class="py-2">${companyData.biz_no || '-'}</td></tr>
+          <tr><td class="py-2 text-gray-500">보고일</td><td class="py-2">${companyData.report_date || '-'}</td></tr>
+        </table>
+      </div>
+      <div class="bg-white rounded-lg border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold mb-4">보유 재무 섹션</h2>
+        <div class="flex flex-wrap gap-2">
+          ${sections.map(s => `<span class="bg-blue-50 text-blue-700 rounded px-2.5 py-1 text-xs font-medium">${s}</span>`).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ─── 재무제표 탭 ─────────────────────────────────────────
+async function loadFinancial() {
+  const tab = document.getElementById('tab-financial');
+  tab.dataset.loaded = '1';
+  tab.innerHTML = '<div class="text-center py-12 text-gray-400">로딩 중...</div>';
+
+  const [secRes, chartRes] = await Promise.all([
+    fetch(`/api/companies/${CID}/sections`),
+    fetch(`/api/companies/${CID}/income_chart`),
+  ]);
+  const sections = await secRes.json();
+  const chartData = await chartRes.json();
+
+  tab.innerHTML = `
+    <!-- ★ 복합 바 차트 -->
+    <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-lg font-semibold">손익 추이</h2>
+        <span class="text-xs text-gray-400">${chartData.unit ? '단위: ' + chartData.unit : ''}</span>
+      </div>
+      <canvas id="incomeChart" height="130"></canvas>
+    </div>
+
+    <!-- ★ 섹션 탭 + 테이블 -->
+    <div class="bg-white rounded-lg border border-gray-200 p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex gap-1 flex-wrap" id="sectionTabs"></div>
+        <span id="tableUnit" class="text-xs text-gray-400"></span>
+      </div>
+      <div id="tableContainer" class="overflow-x-auto"></div>
+    </div>
+  `;
+
+  // 복합 바 차트 그리기
+  drawIncomeChart(chartData);
+
+  // 섹션 탭 버튼 생성
+  const tabsEl = document.getElementById('sectionTabs');
+  sections.forEach((s, i) => {
+    const btn = document.createElement('button');
+    btn.textContent = s;
+    btn.dataset.section = s;
+    btn.className = i === 0
+      ? 'px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white font-medium'
+      : 'px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50';
+    btn.onclick = () => {
+      tabsEl.querySelectorAll('button').forEach(b => {
+        b.className = 'px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-600 hover:bg-gray-50';
+      });
+      btn.className = 'px-3 py-1.5 text-xs rounded-md bg-blue-600 text-white font-medium';
+      loadTable(s);
+    };
+    tabsEl.appendChild(btn);
+  });
+
+  if (sections.length > 0) loadTable(sections[0]);
+}
+
+let incomeChart = null;
+function drawIncomeChart(data) {
+  if (!data.periods || data.periods.length === 0) return;
+
+  const keyMetricNames = ['매출액', '영업이익（손실）', '영업이익(손실)', '영업이익', '당기순이익(손실)', '당기순이익（손실）', '당기순이익'];
+  const colorMap = {
+    '매출액': '#4CAF50',
+    '영업이익（손실）': '#FF7043', '영업이익(손실)': '#FF7043', '영업이익': '#FF7043',
+    '당기순이익(손실)': '#7C3AED', '당기순이익（손실）': '#7C3AED', '당기순이익': '#7C3AED',
+  };
+  const labelMap = {
+    '영업이익（손실）': '영업이익', '영업이익(손실)': '영업이익',
+    '당기순이익(손실)': '당기순이익', '당기순이익（손실）': '당기순이익',
+  };
+
+  const datasets = [];
+  for (const row of data.rows) {
+    if (!keyMetricNames.includes(row.metric)) continue;
+    const values = data.periods.map(p => row.values[p]?.num ?? null);
+    datasets.push({
+      label: labelMap[row.metric] || row.metric,
+      data: values,
+      backgroundColor: colorMap[row.metric] || '#3B82F6',
+      borderRadius: 4,
+      borderSkipped: false,
+    });
+    if (datasets.length >= 3) break;
+  }
+  if (datasets.length === 0) return;
+
+  const ctx = document.getElementById('incomeChart').getContext('2d');
+  if (incomeChart) incomeChart.destroy();
+  incomeChart = new Chart(ctx, {
+    type: 'bar',
+    data: { labels: data.periods, datasets },
+    options: {
+      responsive: true,
+      layout: { padding: { top: 30, left: 8, right: 8 } },
+      plugins: {
+        legend: { position: 'bottom', labels: { font: { size: 12 }, boxWidth: 14, padding: 16 } },
+        tooltip: { callbacks: { label: c => `${c.dataset.label}: ${fmtKorean(c.raw, data.unit)}` } },
+        datalabels: {
+          anchor: 'end', align: 'top',
+          offset: 2,
+          color: ctx => {
+            const v = ctx.dataset.data[ctx.dataIndex];
+            return v < 0 ? '#ef4444' : '#444';
+          },
+          font: { size: 9 },
+          formatter: v => v === null ? '' : fmtKorean(v, data.unit),
+          display: ctx => {
+            const v = ctx.dataset.data[ctx.dataIndex];
+            return v !== null && v !== 0;
+          },
+          clamp: true,
+        },
+      },
+      scales: {
+        x: { grid: { display: false } },
+        y: {
+          grid: { color: '#f0f0f0' },
+          ticks: { callback: v => fmtKorean(v, data.unit) },
+        },
+      },
+    },
+    plugins: [ChartDataLabels],
+  });
+}
+
+async function loadTable(section) {
+  const container = document.getElementById('tableContainer');
+  container.innerHTML = '<div class="text-center py-8 text-gray-400">로딩 중...</div>';
+
+  const res = await fetch(`/api/companies/${CID}/financial_table?section=${encodeURIComponent(section)}`);
+  const data = await res.json();
+
+  if (!data.rows || data.rows.length === 0) {
+    container.innerHTML = '<div class="text-center py-8 text-gray-400">데이터가 없습니다.</div>';
+    return;
+  }
+
+  const periods = data.periods;
+  // 단위 표기 업데이트
+  const unitEl = document.getElementById('tableUnit');
+  if (unitEl) unitEl.textContent = data.unit ? `단위: ${data.unit}` : '';
+
+  let html = `<table class="w-full text-sm border-collapse">
+    <thead>
+      <tr class="bg-gray-50 border-b-2 border-gray-200">
+        <th class="text-left py-2.5 px-3 font-semibold text-gray-600 sticky left-0 bg-gray-50 min-w-[200px]">구분</th>
+        ${periods.map(p => `<th class="text-right py-2.5 px-3 font-semibold text-gray-600 min-w-[120px]">${p}</th>`).join('')}
+      </tr>
+    </thead><tbody>`;
+
+  data.rows.forEach((row, i) => {
+    const isTotal = /총계|합계|소계/.test(row.metric);
+    const rowBg = isTotal ? 'bg-blue-50/40' : (i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50');
+    const fontClass = isTotal ? 'font-semibold text-gray-900' : 'text-gray-700';
+    html += `<tr class="${rowBg} hover:bg-blue-50/30 border-b border-gray-100">
+      <td class="py-1.5 px-3 sticky left-0 ${rowBg} ${fontClass}">${row.metric}</td>`;
+    periods.forEach(p => {
+      const val = row.values[p];
+      const numColor = val?.num < 0 ? 'text-red-500' : '';
+      html += `<td class="py-1.5 px-3 text-right ${fontClass} ${numColor}">${val?.raw || '-'}</td>`;
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table>';
+  container.innerHTML = html;
+}
+
+// ─── 재무건전성 탭 ───────────────────────────────────────
+async function loadHealth() {
+  const tab = document.getElementById('tab-health');
+  tab.dataset.loaded = '1';
+  tab.innerHTML = '<div class="text-center py-12 text-gray-400">분석 중...</div>';
+
+  const res = await fetch(`/api/companies/${CID}/health`);
+  healthData = await res.json();
+
+  if (healthData.error) {
+    tab.innerHTML = `<div class="text-center py-8 text-gray-400">${healthData.error}</div>`;
+    return;
+  }
+
+  const gradeColors = {
+    '우수': 'text-green-600 bg-green-50 border-green-200',
+    '양호': 'text-blue-600 bg-blue-50 border-blue-200',
+    '보통': 'text-yellow-600 bg-yellow-50 border-yellow-200',
+    '주의': 'text-orange-600 bg-orange-50 border-orange-200',
+    '위험': 'text-red-600 bg-red-50 border-red-200',
+  };
+  const gc = gradeColors[healthData.grade] || 'text-gray-600 bg-gray-50';
+
+  tab.innerHTML = `
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="bg-white rounded-lg border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold mb-4">재무건전성 종합 평가</h2>
+        <div class="text-center mb-6">
+          <div class="inline-block border-2 rounded-full px-8 py-4 ${gc}">
+            <span class="text-3xl font-bold">${healthData.grade}</span>
+          </div>
+          <div class="mt-2 text-sm text-gray-500">종합점수: <span class="font-semibold">${healthData.average_score}점</span> / 100점</div>
+          <div class="text-xs text-gray-400 mt-1">기준기간: ${healthData.period}</div>
+        </div>
+        <table class="w-full text-sm">
+          <thead><tr class="border-b"><th class="text-left py-2 text-gray-500">지표</th><th class="text-right py-2 text-gray-500">값</th><th class="text-right py-2 text-gray-500">점수</th></tr></thead>
+          <tbody>
+            ${Object.entries(healthData.ratios).map(([k, v]) => {
+              const score = healthData.scores[k] || 0;
+              const sc = score >= 60 ? 'text-green-600' : score >= 40 ? 'text-yellow-600' : 'text-red-600';
+              const suffix = k.includes('비율') || k.includes('유보') ? '%' : '배';
+              return `<tr class="border-b"><td class="py-2">${k}</td><td class="text-right">${typeof v === 'number' ? v.toLocaleString() : v}${suffix}</td><td class="text-right font-medium ${sc}">${Math.round(score)}</td></tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div class="bg-white rounded-lg border border-gray-200 p-6">
+        <h2 class="text-lg font-semibold mb-4">건전성 레이더 차트</h2>
+        <div class="flex justify-center"><canvas id="radarCanvas" width="350" height="350"></canvas></div>
+      </div>
+    </div>
+  `;
+
+  const labels = Object.keys(healthData.scores);
+  const values = Object.values(healthData.scores);
+  const ctx = document.getElementById('radarCanvas').getContext('2d');
+  if (radarChart) radarChart.destroy();
+  radarChart = new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels,
+      datasets: [{
+        label: '건전성 점수',
+        data: values,
+        backgroundColor: 'rgba(59,130,246,0.15)',
+        borderColor: 'rgba(59,130,246,0.8)',
+        pointBackgroundColor: 'rgba(59,130,246,1)',
+        pointRadius: 4,
+        borderWidth: 2,
+      }]
+    },
+    options: {
+      scales: { r: { beginAtZero: true, max: 100, ticks: { stepSize: 20, font: { size: 10 } }, pointLabels: { font: { size: 12 } } } },
+      plugins: { legend: { display: false } },
+    }
+  });
+}
+
+// ─── AI 챗봇 탭 ──────────────────────────────────────────
+function initChat() {
+  const tab = document.getElementById('tab-chat');
+  tab.dataset.loaded = '1';
+  tab.innerHTML = `
+    <div class="bg-white rounded-lg border border-gray-200 flex flex-col" style="height:600px">
+      <div class="p-4 border-b border-gray-200">
+        <h2 class="text-lg font-semibold">AI 재무 분석 챗봇</h2>
+        <p class="text-xs text-gray-400 mt-1">이 기업의 재무 데이터를 기반으로 AI가 분석합니다</p>
+      </div>
+      <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-3">
+        <div class="chat-msg bg-blue-50 text-blue-800 rounded-lg px-4 py-2 text-sm">
+          안녕하세요! <strong>${companyData?.company_name || '이 기업'}</strong>의 재무 데이터에 대해 질문해주세요.<br>
+          예: "이 기업의 재무 건전성은?", "부채비율이 높은 이유는?", "향후 전망은?"
+        </div>
+      </div>
+      <div class="p-4 border-t border-gray-200">
+        <div class="flex gap-2">
+          <input id="chatInput" type="text" placeholder="질문을 입력하세요..."
+            class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+            onkeydown="if(event.key==='Enter') sendChat()">
+          <button onclick="sendChat()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition-colors">전송</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function sendChat() {
+  const input = document.getElementById('chatInput');
+  const msg = input.value.trim();
+  if (!msg) return;
+  const messages = document.getElementById('chatMessages');
+  messages.innerHTML += `<div class="chat-msg ml-auto bg-gray-100 rounded-lg px-4 py-2 text-sm text-right">${msg}</div>`;
+  input.value = '';
+  messages.scrollTop = messages.scrollHeight;
+  const lid = 'loading-' + Date.now();
+  messages.innerHTML += `<div id="${lid}" class="chat-msg bg-gray-50 rounded-lg px-4 py-2 text-sm text-gray-400">분석 중...</div>`;
+  messages.scrollTop = messages.scrollHeight;
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ company_id: CID, message: msg }),
+    });
+    const data = await res.json();
+    document.getElementById(lid).remove();
+    const bgClass = data.error ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-gray-800';
+    messages.innerHTML += `<div class="chat-msg ${bgClass} rounded-lg px-4 py-2 text-sm whitespace-pre-wrap">${data.reply}</div>`;
+  } catch {
+    document.getElementById(lid).remove();
+    messages.innerHTML += `<div class="chat-msg bg-red-50 text-red-700 rounded-lg px-4 py-2 text-sm">오류가 발생했습니다.</div>`;
+  }
+  messages.scrollTop = messages.scrollHeight;
+}
+
+// Init
+loadCompany();
+</script>
+{% endblock %}

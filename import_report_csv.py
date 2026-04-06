@@ -178,6 +178,16 @@ def join_line(fields: Sequence[str]) -> str:
     return ",".join([f.strip() for f in fields if f is not None]).strip()
 
 
+def company_key_from_source_file(path: str) -> str:
+    base = os.path.basename(path).strip()
+    base = re.sub(r"\.csv$|\.CSV$", "", base)
+    # Ignore leading download date prefix (e.g. 20260401_)
+    base = re.sub(r"^\d{8}_", "", base)
+    # Ignore duplicate-download suffix like " (1)", " (2)", ...
+    base = re.sub(r"\s*\(\d+\)$", "", base)
+    return base
+
+
 def detect_mode_header(
     fields: List[str],
     periods: List[str],
@@ -218,11 +228,15 @@ def import_csv_to_db(csv_path: str, db_path: str) -> int:
         conn.execute("PRAGMA foreign_keys = ON;")
         ensure_schema(conn)
 
-        # Idempotent import: remove previous import for the same source_file.
+        # Idempotent import: filename-based company key (date prefix ignored).
         cur = conn.cursor()
         with conn:
-            cur.execute("SELECT id FROM report_imports WHERE source_file = ?", (csv_path,))
-            existing = [r[0] for r in cur.fetchall()]
+            current_key = company_key_from_source_file(csv_path)
+            cur.execute("SELECT id, source_file FROM report_imports")
+            existing = []
+            for import_id, source_file in cur.fetchall():
+                if company_key_from_source_file(source_file) == current_key:
+                    existing.append(import_id)
             for import_id in existing:
                 cur.execute("DELETE FROM report_imports WHERE id = ?", (import_id,))
 

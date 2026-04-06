@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}기업 재무정보 - 기업 목록{% endblock %}
+
+{% block content %}
+<div class="fade-in">
+  <!-- Search -->
+  <div class="mb-6">
+    <div class="relative max-w-md">
+      <input id="searchInput" type="text" placeholder="기업명 검색..."
+        class="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-sm">
+      <svg class="absolute left-3 top-3 w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Company count -->
+  <div class="mb-4 text-sm text-gray-500">
+    총 <span id="companyCount" class="font-semibold text-gray-700">0</span>개 기업
+  </div>
+
+  <!-- Company grid -->
+  <div id="companyGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let debounceTimer;
+const searchInput = document.getElementById('searchInput');
+const companyGrid = document.getElementById('companyGrid');
+const companyCount = document.getElementById('companyCount');
+
+async function loadCompanies(q = '') {
+  const res = await fetch(`/api/companies?q=${encodeURIComponent(q)}`);
+  const data = await res.json();
+  companyCount.textContent = data.length;
+
+  companyGrid.innerHTML = data.map(c => `
+    <a href="/company/${c.id}" class="block bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md hover:border-blue-300 transition-all duration-200">
+      <div class="font-semibold text-gray-900 mb-1 truncate">${c.company_name}</div>
+      <div class="text-xs text-gray-500 space-y-0.5">
+        <div>👤 ${c.representatives || '-'}</div>
+        <div>🏢 ${c.biz_no || '-'}</div>
+        <div>📅 ${c.report_date || '-'}</div>
+      </div>
+    </a>
+  `).join('');
+}
+
+searchInput.addEventListener('input', () => {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => loadCompanies(searchInput.value), 300);
+});
+
+loadCompanies();
+</script>
+{% endblock %}

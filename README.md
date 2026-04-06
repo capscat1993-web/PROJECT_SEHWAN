@@ -17,5 +17,3 @@
 - 현재 설치 패키지 저장: `pip freeze > requirements.txt`
 "# PROJECT_SEHWAN" 
 "# PROJECT_SEHWAN" 
-"# PROJECT_SEHWAN" 
-"# PROJECT_SEHWAN" 

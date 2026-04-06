@@ -31,23 +31,10 @@ python ".\export_reports_excel.py" --db ".\reports.db" --out "reports_by_company
 
 ## 3) Git 저장(커밋)
 
-### A. (처음이라면) 저장소 초기화
-```powershell
-git init
-```
+1. git add .
+2. git commit -m "할말"
+3. git push
 
-### B. 변경사항 확인
-```powershell
-git status
-```
-
-### C. 모두 스테이징
-```powershell
-git add -A
-```
-
-### D. 커밋
-```powershell
-git commit -m "Update reports import/export"
-```
-
+끝
+만약 안되면 터미널에 안되는이유 확인하고 오류내용 복사 후 에이전트한테 물어보기
+![1775118512499](image/COMMANDS/1775118512499.png)

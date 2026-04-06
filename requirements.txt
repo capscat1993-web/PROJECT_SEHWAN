@@ -1,3 +1,8 @@
 pandas
 openpyxl
 pypdf
+fastapi
+uvicorn[standard]
+jinja2
+python-dotenv
+openai
