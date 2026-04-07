@@ -106,6 +106,14 @@ async function loadCompany() {
   companyData = await compRes.json();
   const km = await kmRes.json();
 
+  // 이 기업을 확인했음으로 localStorage에 기록 (목록 NEW 뱃지 제거용)
+  try {
+    const snapKey = 'cf_company_snapshot';
+    const snap = JSON.parse(localStorage.getItem(snapKey) || '{}');
+    snap[String(CID)] = companyData.imported_at || '';
+    localStorage.setItem(snapKey, JSON.stringify(snap));
+  } catch {}
+
   // 헤더
   document.getElementById('companyHeader').innerHTML = `
     <h1 class="text-2xl font-bold text-gray-900 mb-2">${companyData.company_name}</h1>
@@ -249,7 +257,7 @@ async function loadFinancial() {
     <div class="bg-white rounded-lg border border-gray-200 p-6 mb-6">
       <div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-semibold">손익 추이</h2>
-        <span class="text-xs text-gray-400">${chartData.unit ? '단위: ' + chartData.unit : ''}</span>
+        <span class="text-xs text-gray-400"></span>
       </div>
       <canvas id="incomeChart" height="130"></canvas>
     </div>
@@ -341,7 +349,7 @@ function drawIncomeChart(data) {
             const v = ctx.dataset.data[ctx.dataIndex];
             return v < 0 ? '#ef4444' : '#444';
           },
-          font: { size: 9 },
+          font: { size: 11 },
           formatter: v => v === null ? '' : fmtKorean(v, data.unit),
           display: ctx => {
             const v = ctx.dataset.data[ctx.dataIndex];
@@ -371,8 +379,8 @@ const SECTION_GROUPS = {
   ],
   '현금흐름분석': [
     { label: '영업활동',             color: 'bg-green-50 text-green-700 border-green-200',  trigger: m => /영업활동\s*현금흐름/.test(m) },
-    { label: '투자·재무활동 (유출)', color: 'bg-red-50 text-red-700 border-red-200',       trigger: m => /투자.재무활동\s*현금유출/.test(m) },
     { label: '투자·재무활동 (유입)', color: 'bg-blue-50 text-blue-700 border-blue-200',    trigger: m => /투자.재무활동\s*현금유입/.test(m) },
+    { label: '투자·재무활동 (유출)', color: 'bg-red-50 text-red-700 border-red-200',       trigger: m => /투자.재무활동\s*현금유출/.test(m) },
     { label: '현금 변동',            color: 'bg-gray-100 text-gray-700 border-gray-300',   trigger: m => /현금증감액/.test(m) },
   ],
 };
@@ -411,6 +419,22 @@ async function loadTable(section) {
     return;
   }
 
+  // 현금흐름분석: 유출→유입 순서를 유입→유출로 재정렬
+  if (section === '현금흐름분석') {
+    const rows = data.rows;
+    const idxUchul = rows.findIndex(r => /투자.재무활동\s*현금유출/.test(r.metric));
+    const idxUip   = rows.findIndex(r => /투자.재무활동\s*현금유입/.test(r.metric));
+    if (idxUchul !== -1 && idxUip !== -1 && idxUchul < idxUip) {
+      const idxAfter = rows.findIndex((r, i) => i > idxUip && /현금증감액/.test(r.metric));
+      const uIpEnd   = idxAfter !== -1 ? idxAfter : rows.length;
+      const before    = rows.slice(0, idxUchul);
+      const uChulBlock = rows.slice(idxUchul, idxUip);
+      const uIpBlock   = rows.slice(idxUip, uIpEnd);
+      const after      = rows.slice(uIpEnd);
+      data.rows = [...before, ...uIpBlock, ...uChulBlock, ...after];
+    }
+  }
+
   const periods = data.periods;
   const unitEl = document.getElementById('tableUnit');
   if (unitEl) unitEl.textContent = data.unit ? `단위: ${data.unit}` : '';
@@ -442,10 +466,16 @@ async function loadTable(section) {
       </tr>
     </thead><tbody>`;
 
+  const CF_HIGHLIGHT = m => {
+    const n = m.replace(/\s+/g, '');
+    return /영업활동현금흐름/.test(n) || /투자.재무활동현금유출/.test(n) || /현금증감액/.test(n) || /^차액$/.test(n);
+  };
+
   taggedRows.forEach((row, i) => {
     const m = row.metric;
     const mNorm = m.replace(/\s+/g, '');
     const isTotal = /총계|합계|소계/.test(mNorm);
+    const isCfHighlight = section === '현금흐름분석' && CF_HIGHLIGHT(m);
 
     // 그룹 헤더 삽입
     const matchedGroup = groups.find(g => g.trigger(m));
@@ -461,8 +491,8 @@ async function loadTable(section) {
 
     const isChild  = row._role === 'child';
     const isParent = row._role === 'parent';
-    const rowBg    = isTotal ? 'bg-blue-50/50' : (isChild ? 'bg-gray-50/60' : (i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'));
-    const fontClass = isTotal ? 'font-semibold text-gray-900' : 'text-gray-700';
+    const rowBg    = isCfHighlight ? 'bg-gray-100' : (isTotal ? 'bg-blue-50/50' : (isChild ? 'bg-gray-50/60' : (i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40')));
+    const fontClass = isCfHighlight ? 'font-semibold text-gray-900' : (isTotal ? 'font-semibold text-gray-900' : 'text-gray-700');
     const indent    = isChild ? 'pl-10' : ((!isTotal && currentGroup) ? 'pl-6' : 'px-3');
     const trAttrs   = isChild ? `data-parent="${row._key}"` : '';
     const hiddenCls = isChild ? 'hidden' : '';
@@ -476,7 +506,8 @@ async function loadTable(section) {
       metricCell = (isChild ? '<span class="mr-1.5 text-gray-300 text-xs">└</span>' : '') + m;
     }
 
-    html += `<tr ${trAttrs} class="${hiddenCls} ${rowBg} hover:bg-blue-50/30 border-b border-gray-100">
+    const trHighlightCls = isCfHighlight ? 'border-l-4 border-l-gray-400' : '';
+    html += `<tr ${trAttrs} class="${hiddenCls} ${rowBg} hover:bg-blue-50/30 border-b border-gray-100 ${trHighlightCls}">
       <td class="py-1.5 ${indent} sticky left-0 ${rowBg} ${fontClass}">${metricCell}</td>`;
     periods.forEach(p => {
       const val = row.values[p];
@@ -504,66 +535,174 @@ async function loadHealth() {
     return;
   }
 
-  const gradeColors = {
-    '우수': 'text-green-600 bg-green-50 border-green-200',
-    '양호': 'text-blue-600 bg-blue-50 border-blue-200',
-    '보통': 'text-yellow-600 bg-yellow-50 border-yellow-200',
-    '주의': 'text-orange-600 bg-orange-50 border-orange-200',
-    '위험': 'text-red-600 bg-red-50 border-red-200',
+  // ── 등급별 색상 매핑 ──────────────────────────────────────
+  const gradeStyle = {
+    'AAA': { badge: 'bg-emerald-100 text-emerald-800 border-emerald-300', bar: '#10b981' },
+    'AA':  { badge: 'bg-green-100 text-green-800 border-green-300',       bar: '#22c55e' },
+    'A':   { badge: 'bg-blue-100 text-blue-800 border-blue-300',          bar: '#3b82f6' },
+    'BBB': { badge: 'bg-yellow-100 text-yellow-800 border-yellow-300',    bar: '#eab308' },
+    'BB':  { badge: 'bg-orange-100 text-orange-800 border-orange-300',    bar: '#f97316' },
+    'B':   { badge: 'bg-red-100 text-red-800 border-red-300',             bar: '#ef4444' },
   };
-  const gc = gradeColors[healthData.grade] || 'text-gray-600 bg-gray-50';
+  const gs = gradeStyle[healthData.grade] || { badge: 'bg-gray-100 text-gray-700 border-gray-300', bar: '#6b7280' };
 
+  const itemGradeColor = {
+    'A (양호)': 'text-emerald-600', 'B (보통)': 'text-blue-600',
+    'C (주의)': 'text-yellow-600',  'D (위험)': 'text-red-600', 'N/A': 'text-gray-400',
+  };
+
+  const domainColors = ['#3b82f6','#8b5cf6','#10b981','#f59e0b','#ef4444'];
+
+  // ── 영역별 레이더 라벨·값 ─────────────────────────────────
+  const radarLabels = healthData.domains.map(d => `${d.name}\n(${d.score}/${d.max_score})`);
+  const radarValues = healthData.domains.map(d =>
+    d.max_score > 0 ? Math.round(d.score / d.max_score * 100) : 0
+  );
+
+  // ── HTML 렌더링 ───────────────────────────────────────────
   tab.innerHTML = `
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 class="text-lg font-semibold mb-4">재무건전성 종합 평가</h2>
-        <div class="text-center mb-6">
-          <div class="inline-block border-2 rounded-full px-8 py-4 ${gc}">
-            <span class="text-3xl font-bold">${healthData.grade}</span>
+    <!-- 종합 요약 카드 -->
+    <div class="bg-white rounded-xl border border-gray-200 p-6 mb-6">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+        <div class="text-center min-w-[5rem]">
+          <div class="inline-flex items-center justify-center w-20 h-20 rounded-full border-2 ${gs.badge} text-3xl font-bold">
+            ${healthData.grade}
           </div>
-          <div class="mt-2 text-sm text-gray-500">종합점수: <span class="font-semibold">${healthData.average_score}점</span> / 100점</div>
-          <div class="text-xs text-gray-400 mt-1">기준기간: ${healthData.period}</div>
+          <div class="mt-1 text-xs text-gray-400">${healthData.period} 기준</div>
         </div>
-        <table class="w-full text-sm">
-          <thead><tr class="border-b"><th class="text-left py-2 text-gray-500">지표</th><th class="text-right py-2 text-gray-500">값</th><th class="text-right py-2 text-gray-500">점수</th></tr></thead>
-          <tbody>
-            ${Object.entries(healthData.ratios).map(([k, v]) => {
-              const score = healthData.scores[k] || 0;
-              const sc = score >= 60 ? 'text-green-600' : score >= 40 ? 'text-yellow-600' : 'text-red-600';
-              const suffix = k.includes('비율') || k.includes('유보') ? '%' : '배';
-              return `<tr class="border-b"><td class="py-2">${k}</td><td class="text-right">${typeof v === 'number' ? v.toLocaleString() : v}${suffix}</td><td class="text-right font-medium ${sc}">${Math.round(score)}</td></tr>`;
-            }).join('')}
-          </tbody>
-        </table>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-baseline gap-2 mb-1">
+            <span class="text-2xl font-bold text-gray-900">${healthData.total_score}점</span>
+            <span class="text-sm text-gray-400">/ 100점</span>
+          </div>
+          <div class="text-sm font-medium text-gray-700 mb-3">${healthData.recommendation}</div>
+          <div class="w-full bg-gray-100 rounded-full h-2.5">
+            <div class="h-2.5 rounded-full transition-all duration-700"
+                 style="width:${healthData.total_score}%; background:${gs.bar}"></div>
+          </div>
+        </div>
+        <div class="hidden md:block text-xs text-gray-400 space-y-0.5 shrink-0">
+          <div><span class="font-semibold text-emerald-600">AAA</span> 85점↑ 최우량</div>
+          <div><span class="font-semibold text-green-600">AA</span>&nbsp; 75점↑ 우량</div>
+          <div><span class="font-semibold text-blue-600">A</span>&nbsp;&nbsp;&nbsp; 65점↑ 양호</div>
+          <div><span class="font-semibold text-yellow-600">BBB</span> 55점↑ 보통</div>
+          <div><span class="font-semibold text-orange-500">BB</span>&nbsp; 45점↑ 주의</div>
+          <div><span class="font-semibold text-red-600">B</span>&nbsp;&nbsp;&nbsp; 44점↓ 위험</div>
+        </div>
       </div>
-      <div class="bg-white rounded-lg border border-gray-200 p-6">
-        <h2 class="text-lg font-semibold mb-4">건전성 레이더 차트</h2>
-        <div class="flex justify-center"><canvas id="radarCanvas" width="350" height="350"></canvas></div>
+    </div>
+
+    <!-- 레이더 차트 + 영역별 점수 바 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div class="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 class="text-base font-semibold text-gray-700 mb-4">영역별 건전성</h3>
+        <div class="flex justify-center"><canvas id="radarCanvas" width="300" height="300"></canvas></div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 class="text-base font-semibold text-gray-700 mb-4">영역별 점수</h3>
+        <div class="space-y-4" id="domainBars"></div>
+      </div>
+    </div>
+
+    <!-- 세부 지표 테이블 -->
+    <div class="bg-white rounded-xl border border-gray-200 p-6">
+      <h3 class="text-base font-semibold text-gray-700 mb-4">세부 지표</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b-2 border-gray-200 bg-gray-50">
+              <th class="text-left py-2.5 px-3 font-semibold text-gray-500">영역</th>
+              <th class="text-left py-2.5 px-3 font-semibold text-gray-500">지표</th>
+              <th class="text-right py-2.5 px-3 font-semibold text-gray-500">값</th>
+              <th class="text-center py-2.5 px-3 font-semibold text-gray-500">벤치마크</th>
+              <th class="text-center py-2.5 px-3 font-semibold text-gray-500">점수</th>
+              <th class="text-center py-2.5 px-3 font-semibold text-gray-500">등급</th>
+            </tr>
+          </thead>
+          <tbody id="healthTableBody"></tbody>
+        </table>
       </div>
     </div>
   `;
 
-  const labels = Object.keys(healthData.scores);
-  const values = Object.values(healthData.scores);
+  // ── 영역별 점수 바 렌더링 ─────────────────────────────────
+  const barsEl = document.getElementById('domainBars');
+  healthData.domains.forEach((d, i) => {
+    const pct = d.max_score > 0 ? Math.round(d.score / d.max_score * 100) : 0;
+    const color = domainColors[i] || '#6b7280';
+    barsEl.innerHTML += `
+      <div>
+        <div class="flex justify-between text-xs text-gray-600 mb-1">
+          <span class="font-medium">${d.name}</span>
+          <span>${d.score} / ${d.max_score}점</span>
+        </div>
+        <div class="w-full bg-gray-100 rounded-full h-3">
+          <div class="h-3 rounded-full transition-all duration-700"
+               style="width:${pct}%; background:${color}"></div>
+        </div>
+      </div>
+    `;
+  });
+
+  // ── 세부 테이블 렌더링 ────────────────────────────────────
+  const tbody = document.getElementById('healthTableBody');
+  healthData.domains.forEach(d => {
+    d.items.forEach((item, idx) => {
+      const gc = itemGradeColor[item.item_grade] || 'text-gray-500';
+      const scoreColor = item.score === item.max_score
+        ? 'text-emerald-600 font-bold'
+        : item.score === 0
+          ? 'text-red-500'
+          : 'text-gray-700';
+      const domainCell = idx === 0
+        ? `<td class="py-2.5 px-3 font-medium text-gray-700 align-top" rowspan="${d.items.length}">${d.name}</td>`
+        : '';
+      const valDisplay = item.value !== null
+        ? `${item.value.toLocaleString('ko-KR')}${item.unit}`
+        : '-';
+      tbody.innerHTML += `
+        <tr class="border-b border-gray-100 hover:bg-gray-50/50">
+          ${domainCell}
+          <td class="py-2.5 px-3 text-gray-700">${item.label}</td>
+          <td class="py-2.5 px-3 text-right font-mono text-gray-800">${valDisplay}</td>
+          <td class="py-2.5 px-3 text-center text-gray-400 text-xs">${item.benchmark}</td>
+          <td class="py-2.5 px-3 text-center ${scoreColor}">${item.score}<span class="text-gray-300 text-xs">/${item.max_score}</span></td>
+          <td class="py-2.5 px-3 text-center text-xs font-medium ${gc}">${item.item_grade}</td>
+        </tr>
+      `;
+    });
+  });
+
+  // ── 레이더 차트 ──────────────────────────────────────────
   const ctx = document.getElementById('radarCanvas').getContext('2d');
   if (radarChart) radarChart.destroy();
   radarChart = new Chart(ctx, {
     type: 'radar',
     data: {
-      labels,
+      labels: radarLabels,
       datasets: [{
-        label: '건전성 점수',
-        data: values,
+        label: '건전성 점수(%)',
+        data: radarValues,
         backgroundColor: 'rgba(59,130,246,0.15)',
         borderColor: 'rgba(59,130,246,0.8)',
-        pointBackgroundColor: 'rgba(59,130,246,1)',
-        pointRadius: 4,
+        pointBackgroundColor: domainColors,
+        pointRadius: 5,
         borderWidth: 2,
       }]
     },
     options: {
-      scales: { r: { beginAtZero: true, max: 100, ticks: { stepSize: 20, font: { size: 10 } }, pointLabels: { font: { size: 12 } } } },
-      plugins: { legend: { display: false } },
+      scales: {
+        r: {
+          beginAtZero: true, max: 100, min: 0,
+          ticks: { stepSize: 25, font: { size: 9 }, display: false },
+          pointLabels: { font: { size: 11 } },
+          grid: { color: 'rgba(0,0,0,0.08)' },
+        }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => `${c.raw}% 달성` } },
+      },
     }
   });
 }

@@ -1,120 +1,206 @@
-"""재무건전성 지표 계산 서비스."""
+"""재무건전성 지표 계산 서비스 — 엑셀 템플릿 기준 (8개 지표, 100점)."""
 
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 from app.database import get_db
 
 
-def _find_value(rows: list, metric_keywords: List[str], period: str) -> Optional[float]:
-    """Find a value by matching metric name containing any of the keywords."""
-    for r in rows:
-        if r["period"] != period:
-            continue
-        name = r["metric"].replace(" ", "")
-        for kw in metric_keywords:
-            if kw in name:
-                return r["value_num"]
-    return None
+# ─── 점수 계산 규칙 ──────────────────────────────────────────────────────────
+
+def _score_current_ratio(v: float) -> int:
+    """유동비율(%) 배점 20점."""
+    if v >= 150: return 20
+    if v >= 100: return 14
+    if v >= 80:  return 8
+    return 3
+
+def _score_debt_ratio(v: float) -> int:
+    """부채비율(%) 배점 15점. 낮을수록 좋음."""
+    if v <= 100: return 15
+    if v <= 150: return 11
+    if v <= 200: return 6
+    return 2
+
+def _score_interest_coverage(v: float) -> int:
+    """이자보상배율(배) 배점 10점."""
+    if v >= 5: return 10
+    if v >= 2: return 7
+    if v >= 1: return 4
+    return 0
+
+def _score_operating_margin(v: float) -> int:
+    """영업이익률(%) 배점 20점."""
+    if v >= 7: return 20
+    if v >= 3: return 14
+    if v >= 0: return 8
+    return 0
+
+def _score_roe(v: float) -> int:
+    """ROE(%) 배점 10점."""
+    if v >= 10: return 10
+    if v >= 5:  return 7
+    if v >= 0:  return 4
+    return 0
+
+def _score_revenue_growth(v: float) -> int:
+    """매출액증가율(%) 배점 10점."""
+    if v >= 10:  return 10
+    if v >= 0:   return 7
+    if v >= -5:  return 4
+    return 0
+
+def _score_ar_days(v: float) -> int:
+    """매출채권회전일수(일) 배점 8점. 낮을수록 좋음."""
+    if v <= 45:  return 8
+    if v <= 90:  return 5
+    if v <= 120: return 2
+    return 0
+
+def _score_operating_cf(v: float) -> int:
+    """영업현금흐름(백만원) 배점 7점."""
+    if v > 0:    return 7
+    if v > -100: return 4
+    return 0
+
+def _item_grade(score: int, max_score: int) -> str:
+    """개별 항목 등급 (A/B/C/D)."""
+    if max_score == 0:
+        return "N/A"
+    ratio = score / max_score
+    if ratio >= 0.8: return "A (양호)"
+    if ratio >= 0.6: return "B (보통)"
+    if ratio >= 0.4: return "C (주의)"
+    return "D (위험)"
+
+def _total_grade(total: int) -> str:
+    if total >= 85: return "AAA"
+    if total >= 75: return "AA"
+    if total >= 65: return "A"
+    if total >= 55: return "BBB"
+    if total >= 45: return "BB"
+    return "B"
+
+def _recommendation(total: int) -> str:
+    if total >= 75: return "✅ 거래 계속 (정상)"
+    if total >= 55: return "⚠️ 조건부 거래 (모니터링 강화)"
+    return "🚫 거래 재검토 필요"
 
 
-def calculate_health(company_id: int) -> Dict:
-    """Calculate financial health ratios for the latest period."""
+# ─── DB 조회 헬퍼 ────────────────────────────────────────────────────────────
+
+def _get_ratio(conn, import_id: int, section: str, metric: str, period: str) -> Optional[float]:
+    """period 내 첫 번째 행(회사값)을 반환. 없으면 None."""
+    row = conn.execute(
+        "SELECT value_num FROM report_values "
+        "WHERE import_id=? AND section=? AND metric=? AND period=? AND value_num IS NOT NULL "
+        "ORDER BY id LIMIT 1",
+        (import_id, section, metric, period),
+    ).fetchone()
+    return row["value_num"] if row else None
+
+
+def _latest_period(conn, import_id: int) -> Optional[str]:
+    row = conn.execute(
+        "SELECT period FROM report_values "
+        "WHERE import_id=? AND period != '-' ORDER BY period DESC LIMIT 1",
+        (import_id,),
+    ).fetchone()
+    return row["period"] if row else None
+
+
+# ─── 메인 계산 함수 ──────────────────────────────────────────────────────────
+
+def calculate_health(company_id: int) -> dict:
+    """8개 지표 100점 만점 재무건전성 평가."""
     with get_db() as conn:
-        # Get latest period
-        period_row = conn.execute(
-            "SELECT DISTINCT period FROM report_values "
-            "WHERE import_id = ? AND period != '-' ORDER BY period DESC LIMIT 1",
-            (company_id,),
-        ).fetchone()
-        if not period_row:
-            return {"error": "데이터 없음", "ratios": {}, "period": ""}
+        period = _latest_period(conn, company_id)
+        if not period:
+            return {"error": "데이터 없음", "domains": [], "total_score": 0, "grade": "-", "period": ""}
 
-        latest_period = period_row["period"]
+        def get(section, metric):
+            return _get_ratio(conn, company_id, section, metric, period)
 
-        bs_rows = conn.execute(
-            "SELECT metric, period, value_num FROM report_values "
-            "WHERE import_id = ? AND section = '재무상태표' AND submetric IS NULL",
-            (company_id,),
-        ).fetchall()
+        # 8개 지표값 수집
+        current_ratio = get("안정성지표",   "유동비율(%)")
+        debt_ratio    = get("안정성지표",   "부채비율(%)")
+        interest_cov  = get("수익성지표",   "이자보상배율(배)")
+        op_margin     = get("주요재무지표", "매출액영업이익률(%)")
+        roe           = get("수익성지표",   "자기자본순이익률(%)")
+        rev_growth    = get("주요재무지표", "매출액증가율(%)")
+        ar_turnover   = get("활동성지표",   "매출채권회전율(회)")
+        op_cf         = get("현금흐름분석", "영업활동 현금흐름")
 
-        is_rows = conn.execute(
-            "SELECT metric, period, value_num FROM report_values "
-            "WHERE import_id = ? AND section IN ('손익계산서', '포괄손익계산서') AND submetric IS NULL",
-            (company_id,),
-        ).fetchall()
+    # 매출채권회전율 → 회전일수 변환
+    ar_days = round(365 / ar_turnover, 1) if ar_turnover and ar_turnover > 0 else None
 
-    # Extract key values
-    current_assets = _find_value(bs_rows, ["유동자산"], latest_period)
-    current_liabilities = _find_value(bs_rows, ["유동부채"], latest_period)
-    total_liabilities = _find_value(bs_rows, ["부채총계", "부채합계"], latest_period)
-    total_equity = _find_value(bs_rows, ["자본총계", "자본합계"], latest_period)
-    inventory = _find_value(bs_rows, ["재고자산"], latest_period)
-    retained_earnings = _find_value(bs_rows, ["이익잉여금"], latest_period)
-    paid_in_capital = _find_value(bs_rows, ["자본금"], latest_period)
-    operating_income = _find_value(is_rows, ["영업이익", "영업손익"], latest_period)
-    interest_expense = _find_value(is_rows, ["이자비용", "금융비용"], latest_period)
+    def make_item(label, value, unit, benchmark, max_score, score_fn):
+        if value is None:
+            return {
+                "label": label, "value": None, "unit": unit,
+                "benchmark": benchmark, "max_score": max_score,
+                "score": 0, "item_grade": "N/A",
+            }
+        score = score_fn(value)
+        return {
+            "label": label,
+            "value": round(value, 2),
+            "unit": unit,
+            "benchmark": benchmark,
+            "max_score": max_score,
+            "score": score,
+            "item_grade": _item_grade(score, max_score),
+        }
 
-    ratios = {}
+    domains = [
+        {
+            "name": "안전성",
+            "max_score": 45,
+            "items": [
+                make_item("유동비율",     current_ratio, "%",  "100% 이상", 20, _score_current_ratio),
+                make_item("부채비율",     debt_ratio,    "%",  "150% 이하", 15, _score_debt_ratio),
+                make_item("이자보상배율", interest_cov,  "배", "3배 이상",  10, _score_interest_coverage),
+            ],
+        },
+        {
+            "name": "수익성",
+            "max_score": 30,
+            "items": [
+                make_item("영업이익률", op_margin, "%", "5% 이상", 20, _score_operating_margin),
+                make_item("ROE",        roe,       "%", "8% 이상", 10, _score_roe),
+            ],
+        },
+        {
+            "name": "성장성",
+            "max_score": 10,
+            "items": [
+                make_item("매출액증가율", rev_growth, "%", "5% 이상", 10, _score_revenue_growth),
+            ],
+        },
+        {
+            "name": "활동성",
+            "max_score": 8,
+            "items": [
+                make_item("매출채권회전일수", ar_days, "일", "60일 이하", 8, _score_ar_days),
+            ],
+        },
+        {
+            "name": "현금흐름",
+            "max_score": 7,
+            "items": [
+                make_item("영업현금흐름", op_cf, "백만원", "양(+)값", 7, _score_operating_cf),
+            ],
+        },
+    ]
 
-    # 유동비율 (Current Ratio)
-    if current_assets and current_liabilities and current_liabilities != 0:
-        ratios["유동비율"] = round(current_assets / current_liabilities * 100, 1)
+    # 도메인별 점수 합산
+    for d in domains:
+        d["score"] = sum(i["score"] for i in d["items"])
 
-    # 부채비율 (Debt Ratio)
-    if total_liabilities is not None and total_equity and total_equity != 0:
-        ratios["부채비율"] = round(total_liabilities / total_equity * 100, 1)
-
-    # 당좌비율 (Quick Ratio)
-    if current_assets is not None and current_liabilities and current_liabilities != 0:
-        inv = inventory or 0
-        ratios["당좌비율"] = round((current_assets - inv) / current_liabilities * 100, 1)
-
-    # 유보율 (Retained Earnings Ratio)
-    if retained_earnings is not None and paid_in_capital and paid_in_capital != 0:
-        ratios["유보율"] = round(retained_earnings / paid_in_capital * 100, 1)
-
-    # 이자보상비율 (Interest Coverage Ratio)
-    if operating_income is not None and interest_expense and interest_expense != 0:
-        ratios["이자보상비율"] = round(operating_income / interest_expense, 2)
-
-    # Score each ratio (0-100)
-    scores = {}
-    if "유동비율" in ratios:
-        v = ratios["유동비율"]
-        scores["유동비율"] = min(100, max(0, v / 2))  # 200% = 100점
-    if "부채비율" in ratios:
-        v = ratios["부채비율"]
-        scores["부채비율"] = min(100, max(0, 100 - v / 2))  # 0% = 100점, 200% = 0점
-    if "당좌비율" in ratios:
-        v = ratios["당좌비율"]
-        scores["당좌비율"] = min(100, max(0, v / 1.5))  # 150% = 100점
-    if "유보율" in ratios:
-        v = ratios["유보율"]
-        scores["유보율"] = min(100, max(0, v / 10))  # 1000% = 100점
-    if "이자보상비율" in ratios:
-        v = ratios["이자보상비율"]
-        scores["이자보상비율"] = min(100, max(0, v * 10))  # 10배 = 100점
-
-    # Overall grade
-    if scores:
-        avg = sum(scores.values()) / len(scores)
-        if avg >= 80:
-            grade = "우수"
-        elif avg >= 60:
-            grade = "양호"
-        elif avg >= 40:
-            grade = "보통"
-        elif avg >= 20:
-            grade = "주의"
-        else:
-            grade = "위험"
-    else:
-        avg = 0
-        grade = "판단불가"
+    total = sum(d["score"] for d in domains)
 
     return {
-        "period": latest_period,
-        "ratios": ratios,
-        "scores": scores,
-        "average_score": round(avg, 1),
-        "grade": grade,
+        "period": period,
+        "total_score": total,
+        "grade": _total_grade(total),
+        "recommendation": _recommendation(total),
+        "domains": domains,
     }
