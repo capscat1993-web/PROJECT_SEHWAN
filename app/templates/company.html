@@ -527,13 +527,22 @@ async function loadHealth() {
   tab.dataset.loaded = '1';
   tab.innerHTML = '<div class="text-center py-12 text-gray-400">분석 중...</div>';
 
-  const res = await fetch(`/api/companies/${CID}/health`);
-  healthData = await res.json();
+  try {
+    const res = await fetch(`/api/companies/${CID}/health`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    healthData = await res.json();
+  } catch (e) {
+    tab.dataset.loaded = '';
+    tab.innerHTML = `<div class="text-center py-8 text-red-400">데이터를 불러오지 못했습니다. (${e.message})<br><span class="text-sm text-gray-400 cursor-pointer underline" onclick="switchTab('health')">다시 시도</span></div>`;
+    return;
+  }
 
   if (healthData.error) {
     tab.innerHTML = `<div class="text-center py-8 text-gray-400">${healthData.error}</div>`;
     return;
   }
+
+  try {
 
   // ── 등급별 색상 매핑 ──────────────────────────────────────
   const gradeStyle = {
@@ -705,6 +714,10 @@ async function loadHealth() {
       },
     }
   });
+  } catch (e) {
+    tab.dataset.loaded = '';
+    tab.innerHTML = `<div class="text-center py-8 text-red-400">화면 렌더링 중 오류가 발생했습니다. (${e.message})<br><span class="text-sm text-gray-400 cursor-pointer underline" onclick="switchTab('health')">다시 시도</span></div>`;
+  }
 }
 
 // ─── AI 챗봇 탭 ──────────────────────────────────────────
