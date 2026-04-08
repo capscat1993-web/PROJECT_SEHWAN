@@ -14,9 +14,10 @@ app.mount("/static", StaticFiles(directory=os.path.join(BASE_DIR, "static")), na
 
 templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 
+# analysis를 먼저 등록( /api/companies/.../health* 경로가 다른 라우터와 겹치지 않도록 )
+app.include_router(analysis.router)
 app.include_router(companies.router)
 app.include_router(financial.router)
-app.include_router(analysis.router)
 app.include_router(chat.router)
 
 

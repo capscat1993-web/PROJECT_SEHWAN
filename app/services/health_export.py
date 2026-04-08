@@ -115,6 +115,14 @@ def _build_summary_sheet(ws, company: dict, health: dict):
     grade     = health.get("grade", "-")
     total     = health.get("total_score", 0)
     rec       = health.get("recommendation", "-")
+    grade_note = health.get("grade_note", "")
+    data_note = health.get("data_note", "")
+    rec_parts = [rec]
+    if grade_note:
+        rec_parts.append(grade_note)
+    if data_note:
+        rec_parts.append(data_note)
+    rec_display = "\n".join(part for part in rec_parts if part)
     grade_hex = GRADE_FILL.get(grade, "F3F4F6")
 
     _merge(ws, r, 2, r, 9, value="■ 종합 평가 결과",
@@ -137,9 +145,9 @@ def _build_summary_sheet(ws, company: dict, health: dict):
 
     _cell(ws, r, 2, "거래 권고", bold=True, size=10,
           fill=PatternFill("solid", fgColor="F1F5F9"))
-    _merge(ws, r, 3, r, 9, value=rec, size=11,
+    _merge(ws, r, 3, r, 9, value=rec_display, size=11, wrap=True,
            fill=PatternFill("solid", fgColor=grade_hex))
-    ws.row_dimensions[r].height = 22
+    ws.row_dimensions[r].height = 44 if grade_note or data_note else 22
     r += 2
 
     # ── 등급 기준표 (소형) ───────────────────────────────────────────────────
@@ -256,7 +264,205 @@ def _build_summary_sheet(ws, company: dict, health: dict):
     ws.sheet_view.showGridLines = False
 
 
-# ─── Sheet 2: 재무 원시데이터 ─────────────────────────────────────────────────
+# ─── Sheet 2: 재무비율 분석 ──────────────────────────────────────────────────
+
+# (영역, 지표명, DB섹션, DB메트릭, 단위, 방향, 벤치마크, 등급기준, 설명)
+# 방향: "↑" = 높을수록 좋음, "↓" = 낮을수록 좋음
+# 활동성 회전율은 DB에서 가져온 뒤 365/값으로 일수 변환
+_RATIO_INDICATORS = [
+    ("안전성", "유동비율",         "안정성지표",   "유동비율(%)",          "%",      "↑", "100% 이상", "≥150% 양호 / 100~150% 보통 / <100% 위험", "단기채무 대비 유동자산 비율"),
+    ("안전성", "부채비율",         "안정성지표",   "부채비율(%)",          "%",      "↓", "150% 이하", "≤100% 양호 / 100~200% 보통 / >200% 위험", "타인자본/자기자본"),
+    ("안전성", "자기자본비율",     "안정성지표",   "자기자본비율(%)",       "%",      "↑", "30% 이상",  "≥40% 양호 / 25~40% 보통 / <25% 위험", "자기자본/총자산"),
+    ("안전성", "차입금의존도",     "안정성지표",   "차입금의존도(%)",       "%",      "↓", "30% 이하",  "≤20% 양호 / 20~40% 보통 / >40% 위험", "차입금/총자산"),
+    ("안전성", "이자보상배율",     "수익성지표",   "이자보상배율(배)",       "배",     "↑", "3배 이상",  "≥5배 양호 / 2~5배 보통 / <2배 위험", "영업이익/이자비용"),
+    ("수익성", "영업이익률",       "수익성지표",   "매출액영업이익률(%)",   "%",      "↑", "5% 이상",   "≥7% 양호 / 3~7% 보통 / <3% 위험", "영업이익/매출액"),
+    ("수익성", "순이익률",         "수익성지표",   "매출액순이익률(%)",     "%",      "↑", "3% 이상",   "≥5% 양호 / 1~5% 보통 / <1% 위험", "당기순이익/매출액"),
+    ("수익성", "ROA",              "수익성지표",   "총자본순이익률(%)",     "%",      "↑", "3% 이상",   "≥5% 양호 / 2~5% 보통 / <2% 위험", "순이익/총자산"),
+    ("수익성", "ROE",              "수익성지표",   "자기자본순이익률(%)",   "%",      "↑", "8% 이상",   "≥10% 양호 / 5~10% 보통 / <5% 위험", "순이익/자기자본"),
+    ("성장성", "매출액증가율",     "주요재무지표", "매출액증가율(%)",       "%",      "↑", "5% 이상",   "≥10% 양호 / 0~10% 보통 / <0% 위험", "전년비 매출 성장률"),
+    ("성장성", "총자산증가율",     "주요재무지표", "총자산증가율(%)",       "%",      "↑", "3% 이상",   "≥5% 양호 / 0~5% 보통 / <0% 위험", "전년비 총자산 성장률"),
+    ("활동성", "매출채권회전일수", "활동성지표",   "매출채권회전율(회)",    "일",     "↓", "60일 이하", "≤45일 양호 / 45~90일 보통 / >90일 위험", "365/매출채권회전율"),
+    ("활동성", "재고자산회전일수", "활동성지표",   "재고자산회전율(회)",    "일",     "↓", "45일 이하", "≤30일 양호 / 30~60일 보통 / >60일 위험", "365/재고자산회전율"),
+    ("활동성", "매입채무회전일수", "활동성지표",   "매입채무회전율(회)",    "일",     "↑", "45~60일",   "결제조건 준수 여부 확인", "365/매입채무회전율"),
+    ("현금흐름", "영업현금흐름",   "현금흐름분석", "영업활동 현금흐름",     "백만원", "↑", "양(+)값",   "연속 양(+) 양호 / 음(-) 주의", "영업활동에서 창출한 현금"),
+]
+
+_TURNOVER_TO_DAYS = {"매출채권회전일수", "재고자산회전일수", "매입채무회전일수"}
+
+_RATIO_TEMPLATE_EXTRA_DESCRIPTIONS = {
+    "유동비율": "단기 채무 대응능력. 1이상이면 단기부채를 유동자산으로 상환 가능",
+    "부채비율": "자본 대비 부채 비율. 낮을수록 재무구조 안정적",
+    "자기자본비율": "총자산 중 자기자본 비중",
+    "차입금의존도": "총자산 대비 금융부채 비율",
+    "이자보상배율": "영업이익으로 이자를 몇 배 갚을 수 있는지",
+    "영업이익률": "본업 수익성 핵심 지표",
+    "순이익률": "최종 수익성",
+    "ROA": "총자산 대비 순이익률",
+    "ROE": "자기자본 대비 순이익률",
+    "매출액증가율": "매출 성장 모멘텀",
+    "총자산증가율": "사업 규모 확대 여부",
+    "매출채권회전일수": "매출채권 회수 속도. 길수록 자금회수 지연",
+    "재고자산회전일수": "재고 소화 속도. 길수록 운전자본 압박",
+    "매입채무회전일수": "철강재 결제조건과 비교 필요",
+    "영업현금흐름": "영업활동으로 창출한 실질 현금. 순이익보다 중요",
+}
+
+
+def _build_ratio_sheet(ws, company_id: int, company: dict):
+    """Sheet 3: 재무비율 분석 — 지표별 3개년 추이 + 벤치마크/등급기준/설명."""
+
+    # ── 열 너비 ─────────────────────────────────────────────────────────────
+    col_specs = [
+        ("A", 4), ("B", 10), ("C", 18),
+        ("D", 14), ("E", 14), ("F", 14),
+        ("G", 14), ("H", 10), ("I", 38), ("J", 30), ("K", 48),
+    ]
+    for col_letter, width in col_specs:
+        ws.column_dimensions[col_letter].width = width
+
+    # ── DB 조회 ──────────────────────────────────────────────────────────────
+    with get_db() as conn:
+        periods = [r["period"] for r in conn.execute(
+            "SELECT DISTINCT period FROM report_values "
+            "WHERE import_id=? AND period != '-' ORDER BY period",
+            (company_id,),
+        ).fetchall()]
+
+        def get_val(section, metric, period):
+            row = conn.execute(
+                "SELECT value_num FROM report_values "
+                "WHERE import_id=? AND section=? AND metric=? AND period=? "
+                "AND value_num IS NOT NULL ORDER BY id LIMIT 1",
+                (company_id, section, metric, period),
+            ).fetchone()
+            return row["value_num"] if row else None
+
+        # 지표별 기간값 수집
+        indicator_data = []
+        for ind in _RATIO_INDICATORS:
+            domain, label, sec, metric, unit, direction, benchmark, grade_criteria, desc = ind
+            extra_desc = _RATIO_TEMPLATE_EXTRA_DESCRIPTIONS.get(label, desc)
+            vals = []
+            for p in periods:
+                v = get_val(sec, metric, p)
+                if label in _TURNOVER_TO_DAYS and v and v > 0:
+                    v = round(365 / v, 1)
+                elif v is not None:
+                    v = round(v, 2)
+                vals.append(v)
+            indicator_data.append((domain, label, unit, direction, benchmark, grade_criteria, desc, extra_desc, vals))
+
+    # 최근 3개 기간만 사용
+    if len(periods) >= 3:
+        display_periods = periods[-3:]
+    else:
+        display_periods = periods
+    # 데이터도 최근 3개 슬라이싱
+    period_count = len(display_periods)
+    data_offset = len(periods) - period_count  # 앞 기간을 잘라낼 offset
+
+    def _fmt(v):
+        if v is None:
+            return "-"
+        return f"{v:,.2f}".rstrip("0").rstrip(".")
+
+    def _wrapped_height(text: object, chars_per_line: int, line_height: int = 16) -> int:
+        value = "" if text is None else str(text)
+        if not value:
+            return line_height
+        lines = 0
+        for chunk in value.splitlines() or [""]:
+            chunk_len = max(1, len(chunk))
+            lines += max(1, (chunk_len + chars_per_line - 1) // chars_per_line)
+        return lines * line_height
+
+    def _trend(vals, direction):
+        """FY-1 → FY 변화 기반 추세."""
+        trimmed = [v for v in vals[-2:] if v is not None]
+        if len(trimmed) < 2:
+            return "–"
+        delta = trimmed[-1] - trimmed[-2]
+        if abs(delta) < 0.01:
+            return "→ 유지"
+        improved = (delta > 0 and direction == "↑") or (delta < 0 and direction == "↓")
+        return "▲ 개선" if improved else "▼ 악화"
+
+    TREND_FILL = {
+        "▲ 개선": PatternFill("solid", fgColor="D1FAE5"),
+        "▼ 악화": PatternFill("solid", fgColor="FEE2E2"),
+        "→ 유지": PatternFill("solid", fgColor="F3F4F6"),
+        "–":      PatternFill("solid", fgColor="F3F4F6"),
+    }
+
+    # ── 타이틀 ───────────────────────────────────────────────────────────────
+    r = 1
+    ws.row_dimensions[r].height = 8
+    r += 1
+    _merge(ws, r, 1, r, 11,
+           value=f"재무비율 분석  |  {company.get('company_name', '')}",
+           bold=True, size=13, color="FFFFFF",
+           fill=HEADER_FILL, align="center")
+    ws.row_dimensions[r].height = 30
+    r += 1
+
+    # 기간 레이블 (FY-2 / FY-1 / FY)
+    period_labels = []
+    for i, p in enumerate(display_periods):
+        offset = period_count - 1 - i
+        period_labels.append(f"FY-{offset}" if offset > 0 else f"FY ({p})")
+
+    # ── 헤더 ─────────────────────────────────────────────────────────────────
+    r += 1
+    headers = ["No.", "영역", "지표"] + period_labels + ["벤치마크", "추세", "등급기준", "설명", "부가설명"]
+    for ci, h in enumerate(headers, 1):
+        _cell(ws, r, ci, h, bold=True, size=10, color="FFFFFF",
+              fill=HEADER_FILL, align="center")
+    ws.row_dimensions[r].height = 30
+    r += 1
+
+    # ── 데이터 행 ────────────────────────────────────────────────────────────
+    current_domain = None
+    domain_start_r = r
+    domain_rows: list = []  # (domain, start, end)용
+    seq = 1
+
+    for idx, (domain, label, unit, direction, benchmark, grade_criteria, desc, extra_desc, all_vals) in enumerate(indicator_data):
+        vals = all_vals[data_offset:] if data_offset > 0 else all_vals
+        # 길이 맞추기
+        while len(vals) < period_count:
+            vals = [None] + vals
+
+        trend = _trend(vals, direction)
+        domain_fill = PatternFill("solid", fgColor=DOMAIN_FILLS.get(domain, "FFFFFF"))
+        trend_fill = TREND_FILL.get(trend, PatternFill("solid", fgColor="F3F4F6"))
+        zebra = ZEBRA_FILL if idx % 2 == 0 else PatternFill("solid", fgColor="FFFFFF")
+
+        _cell(ws, r, 1, seq,     size=9, fill=zebra, align="center")
+        _cell(ws, r, 2, domain,  size=9, fill=domain_fill, align="center", bold=True)
+        _cell(ws, r, 3, f"{label}  ({unit})", size=9, fill=zebra)
+
+        for ci, v in enumerate(vals, 4):
+            _cell(ws, r, ci, _fmt(v), size=9, fill=zebra, align="right")
+
+        _cell(ws, r, 4 + period_count,     benchmark,      size=9, fill=zebra, align="center")
+        _cell(ws, r, 5 + period_count,     trend,          size=9, fill=trend_fill, align="center", bold=True)
+        _cell(ws, r, 6 + period_count,     grade_criteria, size=9, fill=zebra, wrap=True)
+        _cell(ws, r, 7 + period_count,     desc,           size=9, fill=zebra, wrap=True)
+        _cell(ws, r, 8 + period_count,     extra_desc,     size=9, fill=zebra, wrap=True)
+        ws.row_dimensions[r].height = max(
+            22,
+            _wrapped_height(grade_criteria, 24),
+            _wrapped_height(desc, 20),
+            _wrapped_height(extra_desc, 34),
+        )
+        r += 1
+        seq += 1
+
+    ws.freeze_panes = "D5"
+    ws.sheet_view.showGridLines = False
+
+
+# ─── Sheet 3: 재무 원시데이터 ─────────────────────────────────────────────────
 
 def _build_rawdata_sheet(ws, company_id: int, company: dict):
     ws.column_dimensions["A"].width = 3
@@ -377,8 +583,12 @@ def export_health_excel(company_id: int) -> io.BytesIO:
     _build_summary_sheet(ws1, company, health)
 
     # Sheet 2
-    ws2 = wb.create_sheet("재무 원시데이터")
-    _build_rawdata_sheet(ws2, company_id, company)
+    ws2 = wb.create_sheet("재무비율 분석")
+    _build_ratio_sheet(ws2, company_id, company)
+
+    # Sheet 3
+    ws3 = wb.create_sheet("재무 원시데이터")
+    _build_rawdata_sheet(ws3, company_id, company)
 
     buf = io.BytesIO()
     wb.save(buf)

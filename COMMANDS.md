@@ -29,7 +29,15 @@ python ".\export_reports_excel.py" --db ".\reports.db" --out "reports_by_company
 python ".\export_reports_excel.py" --db ".\reports.db" --out "reports_by_company.xlsx" --include-notes
 ```
 
-## 3) Git 저장(커밋)
+## 3) 로컬 웹 서버 (포트 8000)
+
+Excel 다운로드가 `{"detail":"Not Found"}` 이면, **예전 uvicorn이 8000을 잡고 있는 경우**가 많습니다. 아래로 포트를 비운 뒤 다시 띄우세요.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ".\scripts\run-dev.ps1"
+```
+
+## 4) Git 저장(커밋)
 
 1. git add .
 2. git commit -m "할말"

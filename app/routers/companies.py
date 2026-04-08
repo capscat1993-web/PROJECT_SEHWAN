@@ -13,13 +13,13 @@ async def list_companies(q: str = Query("", description="검색어")):
     with get_db() as conn:
         if q:
             rows = conn.execute(
-                "SELECT id, company_name, representatives, biz_no, report_date, industry, main_product "
+                "SELECT id, company_name, representatives, biz_no, report_date, industry, main_product, imported_at "
                 "FROM report_imports WHERE company_name LIKE ? ORDER BY company_name",
                 (f"%{q}%",),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id, company_name, representatives, biz_no, report_date, industry, main_product "
+                "SELECT id, company_name, representatives, biz_no, report_date, industry, main_product, imported_at "
                 "FROM report_imports ORDER BY company_name"
             ).fetchall()
     return [dict(r) for r in rows]
