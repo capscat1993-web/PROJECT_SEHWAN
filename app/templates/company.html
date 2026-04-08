@@ -23,14 +23,12 @@
       <button onclick="switchTab('overview')" data-tab="overview" class="py-2 text-sm tab-active">기업 개요</button>
       <button onclick="switchTab('financial')" data-tab="financial" class="py-2 text-sm text-gray-500 hover:text-gray-700">재무제표</button>
       <button onclick="switchTab('health')" data-tab="health" class="py-2 text-sm text-gray-500 hover:text-gray-700">재무건전성</button>
-      <button onclick="switchTab('chat')" data-tab="chat" class="py-2 text-sm text-gray-500 hover:text-gray-700">AI 분석</button>
     </nav>
   </div>
 
   <div id="tab-overview" class="tab-content"></div>
   <div id="tab-financial" class="tab-content hidden"></div>
   <div id="tab-health" class="tab-content hidden"></div>
-  <div id="tab-chat" class="tab-content hidden"></div>
 </div>
 {% endblock %}
 
@@ -95,7 +93,6 @@ function switchTab(tab) {
 
   if (tab === 'financial' && !document.getElementById('tab-financial').dataset.loaded) loadFinancial();
   if (tab === 'health' && !document.getElementById('tab-health').dataset.loaded) loadHealth();
-  if (tab === 'chat' && !document.getElementById('tab-chat').dataset.loaded) initChat();
 }
 
 // ─── 회사 헤더 + 기업 개요 + 핵심 지표 카드 ────────────
@@ -756,62 +753,6 @@ async function loadHealth() {
     tab.dataset.loaded = '';
     tab.innerHTML = `<div class="text-center py-8 text-red-400">화면 렌더링 중 오류가 발생했습니다. (${e.message})<br><span class="text-sm text-gray-400 cursor-pointer underline" onclick="switchTab('health')">다시 시도</span></div>`;
   }
-}
-
-// ─── AI 챗봇 탭 ──────────────────────────────────────────
-function initChat() {
-  const tab = document.getElementById('tab-chat');
-  tab.dataset.loaded = '1';
-  tab.innerHTML = `
-    <div class="bg-white rounded-lg border border-gray-200 flex flex-col" style="height:600px">
-      <div class="p-4 border-b border-gray-200">
-        <h2 class="text-lg font-semibold">AI 재무 분석 챗봇</h2>
-        <p class="text-xs text-gray-400 mt-1">이 기업의 재무 데이터를 기반으로 AI가 분석합니다</p>
-      </div>
-      <div id="chatMessages" class="flex-1 overflow-y-auto p-4 space-y-3">
-        <div class="chat-msg bg-blue-50 text-blue-800 rounded-lg px-4 py-2 text-sm">
-          안녕하세요! <strong>${companyData?.company_name || '이 기업'}</strong>의 재무 데이터에 대해 질문해주세요.<br>
-          예: "이 기업의 재무 건전성은?", "부채비율이 높은 이유는?", "향후 전망은?"
-        </div>
-      </div>
-      <div class="p-4 border-t border-gray-200">
-        <div class="flex gap-2">
-          <input id="chatInput" type="text" placeholder="질문을 입력하세요..."
-            class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-            onkeydown="if(event.key==='Enter') sendChat()">
-          <button onclick="sendChat()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition-colors">전송</button>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-async function sendChat() {
-  const input = document.getElementById('chatInput');
-  const msg = input.value.trim();
-  if (!msg) return;
-  const messages = document.getElementById('chatMessages');
-  messages.innerHTML += `<div class="chat-msg ml-auto bg-gray-100 rounded-lg px-4 py-2 text-sm text-right">${msg}</div>`;
-  input.value = '';
-  messages.scrollTop = messages.scrollHeight;
-  const lid = 'loading-' + Date.now();
-  messages.innerHTML += `<div id="${lid}" class="chat-msg bg-gray-50 rounded-lg px-4 py-2 text-sm text-gray-400">분석 중...</div>`;
-  messages.scrollTop = messages.scrollHeight;
-  try {
-    const res = await fetch(`${API_BASE}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ company_id: CID, message: msg }),
-    });
-    const data = await res.json();
-    document.getElementById(lid).remove();
-    const bgClass = data.error ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-gray-800';
-    messages.innerHTML += `<div class="chat-msg ${bgClass} rounded-lg px-4 py-2 text-sm whitespace-pre-wrap">${data.reply}</div>`;
-  } catch {
-    document.getElementById(lid).remove();
-    messages.innerHTML += `<div class="chat-msg bg-red-50 text-red-700 rounded-lg px-4 py-2 text-sm">오류가 발생했습니다.</div>`;
-  }
-  messages.scrollTop = messages.scrollHeight;
 }
 
 // Init
