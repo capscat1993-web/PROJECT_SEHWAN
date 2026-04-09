@@ -1,6 +1,22 @@
 import type { Metadata } from "next";
+import { Bungee, Noto_Sans_KR } from "next/font/google";
 import { Sidebar } from "@/components/sidebar";
 import "./globals.css";
+
+const bungee = Bungee({
+  weight: "400",
+  subsets: ["latin"],
+  variable: "--font-bungee",
+  display: "swap",
+});
+
+const notoSansKR = Noto_Sans_KR({
+  weight: ["400", "500", "600", "700", "800"],
+  subsets: ["latin"],
+  variable: "--font-noto",
+  display: "swap",
+  preload: false,
+});
 
 export const metadata: Metadata = {
   title: "기업 재무 리포트",
@@ -9,15 +25,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ko">
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Bungee&family=Noto+Sans+KR:wght@400;500;600;700;800&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html lang="ko" className={`${bungee.variable} ${notoSansKR.variable}`}>
       <body>
         <Sidebar />
         {children}

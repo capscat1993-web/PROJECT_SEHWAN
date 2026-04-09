@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 
 import { ChatPanel } from "@/components/chat-panel";
 import { apiFetchJson, getErrorMessage } from "@/lib/api";
@@ -92,8 +92,14 @@ export function CompanyListPage({ initialCompanies = [] }: { initialCompanies?: 
   const [status, setStatus] = useState<AsyncStatus>(initialCompanies.length ? "success" : "idle");
   const [errorMessage, setErrorMessage] = useState("");
   const deferredQuery = useDeferredValue(query);
+  // SSR 데이터가 이미 있으면 마운트 시 첫 번째 빈 쿼리 fetch를 건너뜀
+  const skipInitialFetch = useRef(initialCompanies.length > 0);
 
   useEffect(() => {
+    if (skipInitialFetch.current) {
+      skipInitialFetch.current = false;
+      return;
+    }
     let ignore = false;
     async function loadCompanies() {
       setStatus("loading");

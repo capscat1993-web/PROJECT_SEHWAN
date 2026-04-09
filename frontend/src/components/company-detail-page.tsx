@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ChatPanel } from "@/components/chat-panel";
 import { FinancialBarChart } from "@/components/financial-bar-chart";
@@ -159,8 +159,14 @@ export function CompanyDetailPage({
   const [incomeChart, setIncomeChart] = useState<IncomeChartResponse | null>(null);
   const [financialTables, setFinancialTables] = useState<Record<string, FinancialTableResponse>>({});
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  // SSR 데이터가 이미 있으면 마운트 시 첫 번째 fetch를 건너뜀
+  const skipInitialFetch = useRef(!!(initialCompany && initialKeyMetrics));
 
   useEffect(() => {
+    if (skipInitialFetch.current) {
+      skipInitialFetch.current = false;
+      return;
+    }
     let ignore = false;
     async function loadInitial() {
       if (!Number.isFinite(companyId) || companyId <= 0) {

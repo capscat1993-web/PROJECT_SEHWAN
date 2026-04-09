@@ -16,8 +16,8 @@ const config: Config = {
         "brand-bg": "#f0f2ff",
       },
       fontFamily: {
-        headline: ["Bungee", "cursive"],
-        body: ["Noto Sans KR", "sans-serif"],
+        headline: ["var(--font-bungee)", "cursive"],
+        body: ["var(--font-noto)", "sans-serif"],
       },
     },
   },
