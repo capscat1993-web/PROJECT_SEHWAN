@@ -2,10 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard-shell";
+import { FinancialTabs } from "@/components/financial-tabs";
 import { HealthPanel } from "@/components/health-panel";
 import { KeyMetricsPanel } from "@/components/key-metrics-panel";
 import { NotesPanel } from "@/components/notes-panel";
-import { SectionTable } from "@/components/section-table";
 import { apiFetch } from "@/lib/api";
 
 type DashboardPayload = {
@@ -75,30 +75,18 @@ export default async function CompanyPage({ params }: { params: { companyId: str
   return (
     <DashboardShell>
       <section className="detail-hero">
-        <div>
-          <Link href="/" className="back-link">
-            전체 목록으로 돌아가기
-          </Link>
-          <span className="eyebrow">Company Radar</span>
+        <Link href="/" className="back-link">
+          ← 전체 목록
+        </Link>
+        <div className="detail-hero-top">
           <h1>{company.company_name}</h1>
-          <p className="detail-subtitle">
-            {company.industry || "업종 미분류"} · {company.main_product || "주요 제품 정보 없음"}
-          </p>
+          {company.industry && <span className="badge">{company.industry}</span>}
+          {company.main_product && <span className="badge">{company.main_product}</span>}
         </div>
-
-        <div className="detail-meta-card">
-          <div>
-            <span>대표자</span>
-            <strong>{company.representatives || "-"}</strong>
-          </div>
-          <div>
-            <span>사업자번호</span>
-            <strong>{company.biz_no || "-"}</strong>
-          </div>
-          <div>
-            <span>보고일</span>
-            <strong>{company.report_date || "-"}</strong>
-          </div>
+        <div className="detail-hero-meta">
+          <span>대표자 {company.representatives || "-"}</span>
+          <span>사업자번호 {company.biz_no || "-"}</span>
+          <span>보고일 {company.report_date || "-"}</span>
         </div>
       </section>
 
@@ -107,23 +95,9 @@ export default async function CompanyPage({ params }: { params: { companyId: str
         <KeyMetricsPanel metrics={key_metrics} />
       </section>
 
-      <section className="detail-grid detail-grid-secondary">
-        <NotesPanel notes={notes} />
-        <div className="panel">
-          <div className="panel-header">
-            <div>
-              <span className="eyebrow">Section Snapshot</span>
-              <h2>재무 표</h2>
-            </div>
-            <p>핵심 섹션을 기간별 비교 테이블로 정리했습니다.</p>
-          </div>
-          <div className="stacked-sections">
-            {Object.values(tables).map((table) => (
-              <SectionTable key={table.section} table={table} />
-            ))}
-          </div>
-        </div>
-      </section>
+      <FinancialTabs tables={tables} companyId={company.id} />
+
+      <NotesPanel notes={notes} />
     </DashboardShell>
   );
 }
