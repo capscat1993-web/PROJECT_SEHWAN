@@ -1,9 +1,10 @@
 pandas
 openpyxl
 pypdf
-fastapi
-uvicorn[standard]
-jinja2
+django
+gunicorn
 python-dotenv
 openai
 tavily-python
+requests
+beautifulsoup4

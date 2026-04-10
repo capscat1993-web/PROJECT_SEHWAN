@@ -1,4 +1,4 @@
-# Kill anything listening on port 8000, then start uvicorn (project root).
+# Kill anything listening on port 8000, then start Django dev server (project root).
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $root
@@ -18,11 +18,11 @@ foreach ($p in $pids) {
 
 Start-Sleep -Seconds 1
 
-$uvicorn = Join-Path $root ".venv\Scripts\uvicorn.exe"
-if (-not (Test-Path -LiteralPath $uvicorn)) {
-    Write-Host "Missing $uvicorn — activate venv and pip install uvicorn first."
+$python = Join-Path $root ".venv\Scripts\python.exe"
+if (-not (Test-Path -LiteralPath $python)) {
+    Write-Host "Missing $python — activate venv and install dependencies first."
     exit 1
 }
 
-Write-Host "Starting uvicorn on http://127.0.0.1:$port ..."
-& $uvicorn "app.main:app" --host "0.0.0.0" --port $port --reload
+Write-Host "Starting Django on http://127.0.0.1:$port ..."
+& $python "backend\manage.py" runserver "0.0.0.0:$port"
