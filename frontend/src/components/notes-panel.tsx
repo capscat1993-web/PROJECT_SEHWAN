@@ -4,7 +4,7 @@ export function NotesPanel({
   notes: { section: string; line: string }[];
 }>) {
   return (
-    <div className="panel">
+    <div className="panel report-panel">
       <div className="panel-header">
         <div>
           <span className="eyebrow">Report Notes</span>

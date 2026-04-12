@@ -5,7 +5,6 @@ import { DashboardShell } from "@/components/dashboard-shell";
 import { FinancialTabs } from "@/components/financial-tabs";
 import { HealthPanel } from "@/components/health-panel";
 import { KeyMetricsPanel } from "@/components/key-metrics-panel";
-import { NotesPanel } from "@/components/notes-panel";
 import { apiFetch } from "@/lib/api";
 
 type DashboardPayload = {
@@ -25,6 +24,9 @@ type DashboardPayload = {
     recommendation: string;
     period: string;
     evaluation_opinion_lines: string[];
+    grade_note?: string;
+    data_note?: string;
+    data_completeness_pct?: number;
     domains: {
       name: string;
       score: number;
@@ -33,10 +35,12 @@ type DashboardPayload = {
         label: string;
         score: number;
         max_score: number;
+        configured_max_score?: number;
         value: number | null;
         unit: string;
         benchmark: string;
         item_grade: string;
+        is_missing?: boolean;
       }[];
     }[];
   };
@@ -47,6 +51,18 @@ type DashboardPayload = {
     unit: string;
     metrics: Record<string, Record<string, number | null>>;
   };
+  financial_statements: Record<
+    string,
+    {
+      section: string;
+      periods: string[];
+      unit: string;
+      rows: {
+        metric: string;
+        values: Record<string, { raw: string; num: number | null }>;
+      }[];
+    }
+  >;
   tables: Record<
     string,
     {
@@ -70,10 +86,11 @@ export default async function CompanyPage({ params }: { params: { companyId: str
     notFound();
   }
 
-  const { company, health, key_metrics, notes, tables } = dashboard;
+  const { company, health, key_metrics, financial_statements } = dashboard;
 
   return (
     <DashboardShell>
+      <div className="detail-report">
       <section className="detail-hero">
         <Link href="/" className="back-link">
           ← 전체 목록
@@ -91,13 +108,17 @@ export default async function CompanyPage({ params }: { params: { companyId: str
       </section>
 
       <section className="detail-grid">
-        <HealthPanel companyId={company.id} health={health} />
         <KeyMetricsPanel metrics={key_metrics} />
       </section>
 
-      <FinancialTabs tables={tables} companyId={company.id} />
+      <section className="detail-section">
+        <FinancialTabs statements={financial_statements} companyId={company.id} />
+      </section>
 
-      <NotesPanel notes={notes} />
+      <section className="detail-grid">
+        <HealthPanel companyId={company.id} health={health} />
+      </section>
+      </div>
     </DashboardShell>
   );
 }

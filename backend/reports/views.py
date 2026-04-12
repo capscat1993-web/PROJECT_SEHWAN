@@ -40,38 +40,125 @@ def _candidate_rank(row) -> tuple[int, int]:
     return (category_rank, value_rank)
 
 
-def _recent_periods(company_id: int, limit: int = 3) -> list[str]:
+def _normalize_metric_unit(unit: str | None) -> str:
+    if not unit:
+        return ""
+    if "백만원" in unit:
+        return "백만원"
+    if "천원" in unit:
+        return "천원"
+    if "억원" in unit:
+        return "억원"
+    if "원" in unit:
+        return "원"
+    return unit.split(",")[0].strip()
+
+
+def _convert_metric_value(value: float | None, unit: str | None, target_unit: str) -> float | None:
+    if value is None:
+        return None
+
+    source_unit = _normalize_metric_unit(unit)
+    if not source_unit or not target_unit or source_unit == target_unit:
+        return value
+
+    conversions = {
+        ("원", "천원"): value / 1_000,
+        ("원", "백만원"): value / 1_000_000,
+        ("천원", "백만원"): value / 1_000,
+        ("백만원", "천원"): value * 1_000,
+    }
+    converted = conversions.get((source_unit, target_unit))
+    return round(converted, 2) if converted is not None else value
+
+
+def _normalize_period(period: str | None) -> str | None:
+    if not period or period == "-":
+        return None
+    normalized = period.strip().replace("-", ".").replace("/", ".")
+    if "." not in normalized:
+        return normalized
+    year_part, month_part = normalized.split(".", 1)
+    if year_part.isdigit() and month_part.isdigit():
+        return f"{int(year_part):04d}.{int(month_part):02d}"
+    return normalized
+
+
+def _period_key(period: str | None) -> tuple[int, int, str]:
+    normalized = _normalize_period(period)
+    if not normalized:
+        return (-1, -1, "")
+    year = -1
+    month = -1
+    if "." in normalized:
+        year_part, month_part = normalized.split(".", 1)
+        if year_part.isdigit():
+            year = int(year_part)
+        if month_part.isdigit():
+            month = int(month_part)
+    return (year, month, normalized)
+
+
+def _recent_periods(company_id: int, limit: int = 3, sections: list[str] | None = None) -> list[str]:
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT period FROM report_values "
-            "WHERE import_id = ? AND period IS NOT NULL AND period != '-'",
-            (company_id,),
-        ).fetchall()
+        if sections:
+            placeholders = ",".join("?" for _ in sections)
+            rows = conn.execute(
+                f"SELECT DISTINCT period FROM report_values "
+                f"WHERE import_id = ? AND section IN ({placeholders}) "
+                f"AND period IS NOT NULL AND period != '-'",
+                (company_id, *sections),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT DISTINCT period FROM report_values "
+                "WHERE import_id = ? AND period IS NOT NULL AND period != '-'",
+                (company_id,),
+            ).fetchall()
 
-    def period_key(period: str) -> tuple[int, int, str]:
-        year = -1
-        month = -1
-        if "." in period:
-            year_part, month_part = period.split(".", 1)
-            if year_part.isdigit():
-                year = int(year_part)
-            if month_part.isdigit():
-                month = int(month_part)
-        return (year, month, period)
-
-    periods = sorted({row["period"] for row in rows}, key=period_key, reverse=True)
+    periods = sorted(
+        {_normalize_period(row["period"]) for row in rows if _normalize_period(row["period"])},
+        key=_period_key,
+        reverse=True,
+    )
     return list(reversed(periods[:limit]))
 
 
+def _recent_financial_periods(company_id: int, limit: int = 3) -> list[str]:
+    periods = _recent_periods(
+        company_id,
+        limit=limit,
+        sections=[
+            "수익성진단",
+            "안정성진단",
+            "현금흐름분석",
+            "현금흐름지표",
+            "주요재무지표",
+            "규모지표",
+            "성장성지표",
+            "수익성지표",
+            "안정성지표",
+            "활동성지표",
+        ],
+    )
+    return periods or _recent_periods(company_id, limit=limit)
+
+
 def _financial_table_payload(company_id: int, section: str) -> dict:
-    allowed_periods = set(_recent_periods(company_id))
+    allowed_period_list = _recent_financial_periods(company_id)
+    allowed_periods = set(allowed_period_list)
     with get_db() as conn:
         periods = conn.execute(
             "SELECT DISTINCT period FROM report_values "
             "WHERE import_id = ? AND section = ? AND period != '-' ORDER BY period",
             (company_id, section),
         ).fetchall()
-        period_list = [row["period"] for row in periods if row["period"] in allowed_periods]
+        period_list = []
+        for row in periods:
+            normalized_period = _normalize_period(row["period"])
+            if normalized_period in allowed_periods and normalized_period not in period_list:
+                period_list.append(normalized_period)
+        period_list = sorted(period_list, key=_period_key)
 
         rows = conn.execute(
             "SELECT metric, period, value_raw, value_num, category, submetric, row_no "
@@ -89,7 +176,7 @@ def _financial_table_payload(company_id: int, section: str) -> dict:
     chosen_rows = {}
     row_order = {}
     for row in rows:
-        period = row["period"]
+        period = _normalize_period(row["period"])
         metric = row["metric"]
         if not period or period == "-" or period not in allowed_periods:
             continue
@@ -108,7 +195,7 @@ def _financial_table_payload(company_id: int, section: str) -> dict:
         if metric not in pivot:
             pivot[metric] = {}
             ordered_metrics.append(metric)
-        pivot[metric][row["period"]] = {"raw": row["value_raw"], "num": row["value_num"]}
+        pivot[metric][_normalize_period(row["period"])] = {"raw": row["value_raw"], "num": row["value_num"]}
 
     table_rows = []
     for metric in ordered_metrics:
@@ -117,14 +204,138 @@ def _financial_table_payload(company_id: int, section: str) -> dict:
 
     return {
         "section": section,
-        "periods": period_list,
+        "periods": period_list or allowed_period_list,
         "rows": table_rows,
         "unit": unit_row["unit"] if unit_row else "",
     }
 
 
+def _filtered_table_payload(
+    company_id: int,
+    section: str,
+    *,
+    submetric: str | None = None,
+    metric_order: list[str] | None = None,
+    label: str | None = None,
+    target_unit: str | None = None,
+) -> dict:
+    allowed_periods = _recent_financial_periods(company_id)
+    allowed_period_set = set(allowed_periods)
+
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT metric, period, value_raw, value_num, unit, submetric, category, row_no "
+            "FROM report_values WHERE import_id = ? AND section = ? AND period != '-' "
+            "ORDER BY row_no, period",
+            (company_id, section),
+        ).fetchall()
+
+    filtered_rows = []
+    for row in rows:
+        if _normalize_period(row["period"]) not in allowed_period_set:
+            continue
+        if submetric and row["submetric"] != submetric:
+            continue
+        filtered_rows.append(row)
+
+    pivot = {}
+    unit = ""
+    for row in filtered_rows:
+        metric = row["metric"]
+        if metric_order and metric not in metric_order:
+            continue
+        row_unit = _normalize_metric_unit(row["unit"])
+        value_num = row["value_num"]
+        value_raw = row["value_raw"]
+        if target_unit and row_unit in {"원", "천원", "백만원", "억원"}:
+            value_num = _convert_metric_value(value_num, row_unit, target_unit)
+            if value_num is None:
+                value_raw = ""
+            elif float(value_num).is_integer():
+                value_raw = f"{int(value_num):,}"
+            else:
+                value_raw = f"{value_num:,.2f}"
+        pivot.setdefault(metric, {})
+        pivot[metric][_normalize_period(row["period"])] = {"raw": value_raw, "num": value_num}
+        if not unit:
+            unit = target_unit or row_unit
+
+    if metric_order:
+        ordered_metrics = [metric for metric in metric_order if metric in pivot]
+    else:
+        ordered_metrics = list(pivot.keys())
+
+    return {
+        "section": label or section,
+        "periods": allowed_periods,
+        "rows": [
+            {
+                "metric": metric,
+                "values": {
+                    period: pivot[metric].get(period, {"raw": "", "num": None}) for period in allowed_periods
+                },
+            }
+            for metric in ordered_metrics
+        ],
+        "unit": unit,
+    }
+
+
+def _financial_statements_payload(company_id: int) -> dict:
+    statements = {
+        "income": _filtered_table_payload(
+            company_id,
+            "수익성진단",
+            submetric="금액",
+            metric_order=[
+                "매출액",
+                "매출원가",
+                "매출총이익",
+                "판매비와관리비",
+                "영업이익",
+                "이자비용",
+                "법인세차감전순손익",
+                "계속사업이익(손실)",
+                "당기순이익",
+            ],
+            label="손익계산서",
+        ),
+        "balance": _filtered_table_payload(
+            company_id,
+            "안정성진단",
+            submetric="금액",
+            metric_order=[
+                "유동자산",
+                "당좌자산",
+                "재고자산",
+                "비유동자산",
+                "자산총계",
+                "유동부채",
+                "비유동부채",
+                "부채총계",
+                "자본총계",
+                "부채와자본총계",
+            ],
+            label="재무상태표",
+        ),
+        "cashflow": _filtered_table_payload(
+            company_id,
+            "현금흐름분석",
+            metric_order=[
+                "손익활동CF/총부채(%)",
+                "손익활동CF/총자본(%)",
+                "손익활동CF/매출액(%)",
+                "영업활동CF/차입금(%)",
+            ],
+            label="현금흐름분석",
+        ),
+    }
+
+    return statements
+
+
 def _key_metrics_payload(company_id: int) -> dict:
-    allowed_periods = _recent_periods(company_id)
+    allowed_periods = _recent_financial_periods(company_id)
     allowed_period_set = set(allowed_periods)
     with get_db() as conn:
         rows = conn.execute(
@@ -135,15 +346,9 @@ def _key_metrics_payload(company_id: int) -> dict:
             "AND period != '-' ORDER BY row_no, period",
             (company_id,),
         ).fetchall()
-        unit_row = conn.execute(
-            "SELECT unit FROM report_values "
-            "WHERE import_id = ? AND section IN ('손익계산서', '포괄손익계산서') "
-            "AND unit IS NOT NULL LIMIT 1",
-            (company_id,),
-        ).fetchone()
 
         diagnostic_rows = conn.execute(
-            "SELECT metric, period, value_num, value_raw, submetric, category, row_no "
+            "SELECT metric, period, value_num, value_raw, unit, submetric, category, row_no "
             "FROM report_values "
             "WHERE import_id = ? AND section = '수익성진단' AND submetric = '금액' AND period != '-' "
             "ORDER BY row_no, period",
@@ -151,33 +356,55 @@ def _key_metrics_payload(company_id: int) -> dict:
         ).fetchall()
 
     periods = allowed_periods
-    metrics = {}
     fallback_metric_names = {
         "매출액": ["매출액"],
         "영업이익": ["영업이익"],
         "당기순이익": ["당기순이익"],
     }
+    selected_series = {}
+    selected_units = set()
     for label, keywords in KEY_METRICS.items():
         series = {}
         for row in rows:
-            if row["period"] in allowed_period_set and any(keyword in row["metric"] for keyword in keywords):
-                existing = series.get(row["period"])
+            normalized_period = _normalize_period(row["period"])
+            if normalized_period in allowed_period_set and any(keyword in row["metric"] for keyword in keywords):
+                existing = series.get(normalized_period)
                 if existing is None:
-                    series[row["period"]] = row
+                    series[normalized_period] = row
                 elif _candidate_rank(row) < _candidate_rank(existing):
-                    series[row["period"]] = row
+                    series[normalized_period] = row
 
         if not series:
             for row in diagnostic_rows:
-                if row["period"] in allowed_period_set and row["metric"] in fallback_metric_names[label]:
-                    series[row["period"]] = row
+                normalized_period = _normalize_period(row["period"])
+                if normalized_period in allowed_period_set and row["metric"] in fallback_metric_names[label]:
+                    series[normalized_period] = row
 
+        for row in series.values():
+            normalized_unit = _normalize_metric_unit(row["unit"])
+            if normalized_unit:
+                selected_units.add(normalized_unit)
+        selected_series[label] = series
+
+    normalized_money_units = selected_units & {"원", "천원", "백만원"}
+    if normalized_money_units:
+        unit = "백만원"
+    elif selected_units:
+        unit = sorted(selected_units)[0]
+    else:
+        unit = "백만원"
+
+    metrics = {}
+    for label, series in selected_series.items():
         metrics[label] = {
-            period: (series[period]["value_num"] if period in series else None)
+            period: (
+                _convert_metric_value(series[period]["value_num"], series[period]["unit"], unit)
+                if period in series
+                else None
+            )
             for period in periods
         }
 
-    unit = unit_row["unit"] if unit_row else "백만원"
     return {"periods": periods, "metrics": metrics, "unit": unit}
 
 
@@ -391,6 +618,7 @@ def company_dashboard(_request, company_id: int):
                 tables[section] = payload
 
     key_metrics = _key_metrics_payload(company_id)
+    financial_statements = _financial_statements_payload(company_id)
 
     return JsonResponse(
         {
@@ -400,6 +628,7 @@ def company_dashboard(_request, company_id: int):
             "notes": _dicts(notes),
             "tables": tables,
             "key_metrics": key_metrics,
+            "financial_statements": financial_statements,
         }
     )
 

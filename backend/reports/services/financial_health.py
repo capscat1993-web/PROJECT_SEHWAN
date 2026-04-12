@@ -202,13 +202,25 @@ def get_operating_cashflow(conn, import_id: int, period: str) -> Optional[float]
     return None
 
 
+def _period_sort_key(period: str) -> tuple[int, int, str]:
+    """'YYYY.MM' 형식 우선, 그 외는 최하위 정렬."""
+    if "." in period:
+        parts = period.split(".", 1)
+        if parts[0].isdigit() and parts[1].isdigit():
+            return (int(parts[0]), int(parts[1]), period)
+    return (-1, -1, period)
+
+
 def _latest_period(conn, import_id: int) -> Optional[str]:
-    row = conn.execute(
-        "SELECT period FROM report_values "
-        "WHERE import_id=? AND period != '-' ORDER BY period DESC LIMIT 1",
+    rows = conn.execute(
+        "SELECT DISTINCT period FROM report_values "
+        "WHERE import_id=? AND period IS NOT NULL AND period != '-'",
         (import_id,),
-    ).fetchone()
-    return row["period"] if row else None
+    ).fetchall()
+    periods = [r["period"] for r in rows if r["period"]]
+    if not periods:
+        return None
+    return max(periods, key=_period_sort_key)
 
 
 def _find_item(domains: list[dict], label: str) -> Optional[dict]:

@@ -1,6 +1,10 @@
 from django.test import Client, TestCase
 
+from openpyxl import load_workbook
+
+from reports.services.health_export import export_health_excel
 from reports.services.financial_health import calculate_health
+from reports.views import _key_metrics_payload
 
 
 class ApiSmokeTests(TestCase):
@@ -32,6 +36,28 @@ class ApiSmokeTests(TestCase):
         self.assertIn("주요재무지표", payload["tables"])
         self.assertEqual(payload["key_metrics"]["periods"], ["2019.12", "2020.12", "2021.12"])
         self.assertNotIn("손익계산서", payload["tables"])
+
+    def test_key_metrics_normalizes_recent_money_values_to_million_won(self):
+        payload = _key_metrics_payload(424)
+        self.assertEqual(payload["unit"], "백만원")
+        self.assertEqual(payload["metrics"]["매출액"]["2024.12"], 59357.0)
+        self.assertEqual(payload["metrics"]["영업이익"]["2024.12"], 3005.0)
+        self.assertEqual(payload["metrics"]["당기순이익"]["2024.12"], 2834.0)
+
+    def test_health_export_uses_template_and_populates_current_company(self):
+        buffer, company_name = export_health_excel(424)
+        workbook = load_workbook(buffer, data_only=False)
+
+        self.assertEqual(company_name, "(주)동남기계")
+        self.assertEqual(
+            workbook.sheetnames,
+            ["재무데이터 입력", "재무비율 분석", "종합 평가표", "고객사 비교 현황", "모니터링 이력"],
+        )
+        self.assertEqual(workbook["재무데이터 입력"]["E5"].value, "(주)동남기계")
+        self.assertEqual(workbook["재무데이터 입력"]["E25"].value, 59357.0)
+        self.assertEqual(workbook["재무데이터 입력"]["E28"].value, 3005.0)
+        self.assertEqual(workbook["재무데이터 입력"]["E32"].value, 2834.0)
+        self.assertEqual(workbook["종합 평가표"]["D23"].value, calculate_health(424)["recommendation"])
 
 
 class FinancialHealthSmokeTests(TestCase):
