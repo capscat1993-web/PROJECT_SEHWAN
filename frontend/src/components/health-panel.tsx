@@ -97,18 +97,25 @@ export function HealthPanel({
 
       <div className="domain-list">
         {health.domains.map((domain) => {
+          const isDataMissing = domain.max_score === 0;
           const ratio = domain.max_score ? Math.round((domain.score / domain.max_score) * 100) : 0;
           return (
             <div key={domain.name} className="domain-card">
               <div className="domain-header">
                 <strong>{domain.name}</strong>
-                <span>
-                  {domain.score} / {domain.max_score}점
-                </span>
+                {isDataMissing ? (
+                  <span className="completeness-badge">데이터 없음</span>
+                ) : (
+                  <span>
+                    {domain.score} / {domain.max_score}점
+                  </span>
+                )}
               </div>
-              <div className="industry-bar score-bar">
-                <div style={{ width: `${ratio}%` }} />
-              </div>
+              {!isDataMissing && (
+                <div className="industry-bar score-bar">
+                  <div style={{ width: `${ratio}%` }} />
+                </div>
+              )}
               <div className="domain-items">
                 {domain.items.map((item) => (
                   <div key={item.label} className="domain-item">
@@ -123,7 +130,9 @@ export function HealthPanel({
                         {item.value !== null ? `${item.value}${item.unit}` : "데이터 없음"}
                       </span>
                       <span className="domain-item-benchmark">기준: {item.benchmark}</span>
-                      <span className="domain-item-score">{item.score}/{item.max_score}점</span>
+                      {!isDataMissing && (
+                        <span className="domain-item-score">{item.score}/{item.max_score}점</span>
+                      )}
                     </div>
                     {item.max_score > 0 && (
                       <div className="item-score-bar">

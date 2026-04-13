@@ -9,6 +9,7 @@ from django.views.decorators.http import require_GET, require_http_methods
 from .db import get_db
 from .services.financial_health import calculate_health
 from .services.health_export import export_health_excel
+from .services.news_fetch import fetch_company_news
 
 KEY_METRICS = {
     "매출액": ["매출액"],
@@ -281,6 +282,43 @@ def _filtered_table_payload(
     }
 
 
+def _cashflow_payload(company_id: int) -> dict:
+    """현금흐름표 → 현금흐름분석 순으로 폴백. 실제 금액 데이터 없으면 빈 결과."""
+    # 0순위: 현금흐름표 (DART 상세 현금흐름표 - 직접/간접법)
+    payload = _filtered_table_payload(
+        company_id,
+        "현금흐름표",
+        label="현금흐름표",
+    )
+    if payload["rows"]:
+        return payload
+
+    # 1순위: 현금흐름분석 (실제 영업/투자/재무 활동 현금흐름 금액)
+    payload = _filtered_table_payload(
+        company_id,
+        "현금흐름분석",
+        metric_order=[
+            "영업활동 현금흐름",
+            "손익활동 현금흐름",
+            "투자/재무활동 현금유출",
+            "투자활동 현금유출",
+            "재무활동 현금유출",
+            "투자/재무활동 현금유입",
+            "투자활동 현금유입",
+            "재무활동 현금유입",
+            "현금증감액",
+            "기초의현금",
+            "기말의현금",
+        ],
+        label="현금흐름분석",
+    )
+    if payload["rows"]:
+        return payload
+
+    # 실제 현금흐름 금액 데이터 없음 → 빈 결과 반환
+    return {"section": "현금흐름분석", "periods": [], "rows": [], "unit": ""}
+
+
 def _financial_statements_payload(company_id: int) -> dict:
     statements = {
         "income": _filtered_table_payload(
@@ -318,18 +356,11 @@ def _financial_statements_payload(company_id: int) -> dict:
             ],
             label="재무상태표",
         ),
-        "cashflow": _filtered_table_payload(
-            company_id,
-            "현금흐름분석",
-            metric_order=[
-                "손익활동CF/총부채(%)",
-                "손익활동CF/총자본(%)",
-                "손익활동CF/매출액(%)",
-                "영업활동CF/차입금(%)",
-            ],
-            label="현금흐름분석",
-        ),
     }
+
+    cashflow = _cashflow_payload(company_id)
+    if cashflow["rows"]:
+        statements["cashflow"] = cashflow
 
     return statements
 
@@ -468,12 +499,18 @@ def overview(_request):
             "FROM report_imports ORDER BY imported_at DESC LIMIT 5"
         ).fetchall()
         value_totals = conn.execute("SELECT COUNT(*) AS total_rows FROM report_values").fetchone()
+        industry_groups = conn.execute(
+            "SELECT COUNT(*) AS industry_count FROM ("
+            "SELECT 1 FROM report_imports GROUP BY COALESCE(industry, '미분류')"
+            ")"
+        ).fetchone()
 
     return JsonResponse(
         {
             "total_companies": totals["total_companies"],
             "latest_report_date": totals["latest_report_date"],
             "total_value_rows": value_totals["total_rows"],
+            "industry_count": industry_groups["industry_count"],
             "top_industries": _dicts(top_industries),
             "latest_companies": _dicts(latest_companies),
         }
@@ -497,6 +534,26 @@ def list_companies(request):
             params,
         ).fetchall()
     return JsonResponse(_dicts(rows), safe=False)
+
+
+@require_GET
+def company_news(request):
+    q = request.GET.get("q", "").strip()
+    with get_db() as conn:
+        params = ()
+        where = ""
+        if q:
+            where = "WHERE company_name LIKE ? OR industry LIKE ? OR main_product LIKE ?"
+            like = f"%{q}%"
+            params = (like, like, like)
+        rows = conn.execute(
+            "SELECT company_name "
+            f"FROM report_imports {where} ORDER BY report_date DESC, company_name ASC LIMIT 6",
+            params,
+        ).fetchall()
+
+    company_names = [row["company_name"] for row in rows]
+    return JsonResponse(fetch_company_news(company_names, query_key=q))
 
 
 @require_GET

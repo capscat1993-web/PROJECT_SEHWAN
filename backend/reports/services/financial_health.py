@@ -177,28 +177,15 @@ def _get_ratio_with_submetric(
 
 
 def get_operating_cashflow(conn, import_id: int, period: str) -> Optional[float]:
-    """영업활동 현금흐름 원시값 우선, 없으면 현금흐름 비율로 추정."""
+    """영업활동 현금흐름 원시값만 반환. 비율 추정 폴백 없음."""
     raw_metric_candidates = [
         ("현금흐름분석", "영업활동 현금흐름"),
-        ("현금흐름표", "영업활동으로인한현금흐름"),
         ("현금흐름표", "영업활동으로인한현금흐름"),
     ]
     for section, metric in raw_metric_candidates:
         value = _get_ratio(conn, import_id, section, metric, period)
         if value is not None:
             return value
-
-    cf_ratio = _get_ratio(conn, import_id, "현금흐름지표", "손익활동CF/매출액(%)", period)
-    if cf_ratio is None:
-        cf_ratio = _get_ratio(conn, import_id, "주요재무지표", "영업활동CF/차입금(%)", period)
-
-    sales_amount = _get_ratio(conn, import_id, "규모지표", "매출액(백만원)", period)
-    if sales_amount is None:
-        sales_amount = _get_ratio_with_submetric(conn, import_id, "수익성진단", "매출액", period, "금액")
-
-    if cf_ratio is not None and sales_amount is not None:
-        return round(sales_amount * (cf_ratio / 100), 2)
-
     return None
 
 

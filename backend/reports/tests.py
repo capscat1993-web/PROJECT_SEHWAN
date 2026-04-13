@@ -23,6 +23,7 @@ class ApiSmokeTests(TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertIn("total_companies", payload)
+        self.assertIn("industry_count", payload)
         self.assertIn("top_industries", payload)
 
     def test_company_dashboard_returns_payload(self):
@@ -67,9 +68,15 @@ class FinancialHealthSmokeTests(TestCase):
         result = calculate_health(999999999)
         self.assertIn("error", result)
 
-    def test_health_service_uses_cashflow_fallback_when_raw_cashflow_is_missing(self):
+    def test_health_service_marks_cashflow_missing_when_no_amount_data(self):
+        """현금흐름 금액 데이터가 없으면 is_missing=True, 총점 환산에서 제외."""
         result = calculate_health(400)
         cashflow_domain = next(domain for domain in result["domains"] if domain["name"] == "현금흐름")
         cashflow_item = cashflow_domain["items"][0]
-        self.assertFalse(cashflow_item["is_missing"])
-        self.assertIsNotNone(cashflow_item["value"])
+        # 현금흐름 금액 데이터 없음 → is_missing=True, max_score=0
+        self.assertTrue(cashflow_item["is_missing"])
+        self.assertIsNone(cashflow_item["value"])
+        self.assertEqual(cashflow_domain["max_score"], 0)
+        # 총점은 현금흐름 제외 후 100점 환산
+        self.assertLessEqual(result["total_score"], 100)
+        self.assertGreater(result["total_score"], 0)
