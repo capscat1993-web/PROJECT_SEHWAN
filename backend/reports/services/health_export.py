@@ -94,7 +94,7 @@ def _convert_value(value: float | None, unit: str | None, target_unit: str) -> f
         ("원", "억원"): value / 100_000_000,
     }
     converted = conversions.get((source_unit, target_unit))
-    return round(converted, 2) if converted is not None else value
+    return round(converted, 2) if converted is not None else None
 
 
 def _select_row(rows: list[dict], period: str, aliases: list[str], *, submetric: str | None = None) -> Optional[dict]:
