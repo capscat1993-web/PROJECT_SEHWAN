@@ -1,7 +1,9 @@
 import io
+import zipfile
 from datetime import date
 from pathlib import Path
 from typing import Optional
+import xml.etree.ElementTree as ET
 
 from openpyxl import load_workbook
 from openpyxl.workbook.properties import CalcProperties
@@ -521,20 +523,76 @@ def _fill_monitoring_sheet(ws, export_data: dict) -> None:
     _set_text(ws, "K3", _grade_action(health.get("grade", "")))
 
 
+def _patch_formula_cache(buffer: io.BytesIO, sheet_index: int, cached_values: dict[str, object]) -> io.BytesIO:
+    namespace = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    ET.register_namespace("", namespace)
+    ns = {"main": namespace}
+    sheet_path = f"xl/worksheets/sheet{sheet_index}.xml"
+
+    source_bytes = buffer.getvalue()
+    output = io.BytesIO()
+
+    with zipfile.ZipFile(io.BytesIO(source_bytes), "r") as src_zip, zipfile.ZipFile(output, "w") as dst_zip:
+        for item in src_zip.infolist():
+            payload = src_zip.read(item.filename)
+            if item.filename == sheet_path:
+                root = ET.fromstring(payload)
+                cell_map = {
+                    cell.get("r"): cell
+                    for cell in root.findall(".//main:c", ns)
+                    if cell.get("r") in cached_values
+                }
+                for cell_ref, value in cached_values.items():
+                    cell = cell_map.get(cell_ref)
+                    if cell is None:
+                        continue
+
+                    if isinstance(value, (int, float)) and not isinstance(value, bool):
+                        cell.attrib.pop("t", None)
+                        text_value = str(value)
+                    else:
+                        cell.set("t", "str")
+                        text_value = "" if value is None else str(value)
+
+                    value_node = cell.find("main:v", ns)
+                    if value_node is None:
+                        value_node = ET.SubElement(cell, f"{{{namespace}}}v")
+                    value_node.text = text_value
+
+                payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+            dst_zip.writestr(item, payload)
+
+    output.seek(0)
+    return output
+
+
 def export_health_excel(company_id: int) -> tuple[io.BytesIO, str]:
     export_data = _collect_export_data(company_id)
     company = export_data["company"]
+    health = export_data["health"]
 
     workbook = load_workbook(TEMPLATE_PATH)
     workbook.calculation = CalcProperties(calcMode="auto", fullCalcOnLoad=True, forceFullCalc=True)
 
     _fill_input_sheet(workbook["재무데이터 입력"], export_data)
-    _fill_ratio_sheet(workbook["재무비율 분석"], export_data)
-    _fill_summary_sheet(workbook["종합 평가표"], export_data)
     _fill_portfolio_sheet(workbook["고객사 비교 현황"], export_data)
     _fill_monitoring_sheet(workbook["모니터링 이력"], export_data)
 
     buffer = io.BytesIO()
     workbook.save(buffer)
     buffer.seek(0)
+    buffer = _patch_formula_cache(
+        buffer,
+        sheet_index=3,
+        cached_values={
+            "D3": company.get("company_name", ""),
+            "D4": company.get("report_date") or str(date.today()),
+            "D5": company.get("main_product", ""),
+            "D6": "해당없음",
+            "D21": health.get("total_score", 0),
+            "D22": health.get("grade", ""),
+            "D23": health.get("recommendation", ""),
+        },
+    )
     return buffer, company.get("company_name", str(company_id))

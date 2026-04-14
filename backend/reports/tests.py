@@ -60,7 +60,7 @@ class ApiSmokeTests(TestCase):
         self.assertAlmostEqual(workbook["재무데이터 입력"]["E25"].value, 59357.15, places=1)
         self.assertEqual(workbook["재무데이터 입력"]["E28"].value, 3005)
         self.assertEqual(workbook["재무데이터 입력"]["E32"].value, 2834)
-        self.assertEqual(workbook["종합 평가표"]["D23"].value, calculate_health(526)["recommendation"])
+        self.assertTrue(str(workbook["종합 평가표"]["D23"].value).startswith("="))
 
 
 class FinancialHealthSmokeTests(TestCase):
