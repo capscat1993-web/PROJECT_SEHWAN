@@ -143,7 +143,7 @@ def _get_ratio(conn, import_id: int, section: str, metric: str, period: str) -> 
     """period 기준 첫 번째 회사값만 반환. 없으면 None."""
     row = conn.execute(
         "SELECT value_num FROM report_values "
-        "WHERE import_id=? AND section=? AND metric=? AND period=? AND value_num IS NOT NULL "
+        "WHERE import_id=%s AND section=%s AND metric=%s AND period=%s AND value_num IS NOT NULL "
         "ORDER BY CASE "
         "WHEN category='당사' THEN 0 "
         "WHEN category IS NULL THEN 1 "
@@ -164,7 +164,7 @@ def _get_ratio_with_submetric(
 ) -> Optional[float]:
     row = conn.execute(
         "SELECT value_num FROM report_values "
-        "WHERE import_id=? AND section=? AND metric=? AND period=? AND submetric=? "
+        "WHERE import_id=%s AND section=%s AND metric=%s AND period=%s AND submetric=%s "
         "AND value_num IS NOT NULL "
         "ORDER BY CASE "
         "WHEN category='당사' THEN 0 "
@@ -201,7 +201,7 @@ def _period_sort_key(period: str) -> tuple[int, int, str]:
 def _latest_period(conn, import_id: int) -> Optional[str]:
     rows = conn.execute(
         "SELECT DISTINCT period FROM report_values "
-        "WHERE import_id=? AND period IS NOT NULL AND period != '-'",
+        "WHERE import_id=%s AND period IS NOT NULL AND period != '-'",
         (import_id,),
     ).fetchall()
     periods = [r["period"] for r in rows if r["period"]]

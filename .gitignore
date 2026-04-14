@@ -41,7 +41,11 @@ csv/**
 *.err.log
 *.xlsx
 
-
-#DB
+# DB
 data/
 database/
+
+.superpowers/
+
+.vercel
+.env*.local
