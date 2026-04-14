@@ -9,7 +9,7 @@ PROJECT_ROOT = BASE_DIR.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-only-secret-key")
-DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
+DEBUG = os.getenv("DJANGO_DEBUG", "false").lower() == "true"
 ALLOWED_HOSTS = [host.strip() for host in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if host.strip()]
 
 INSTALLED_APPS = [
@@ -49,13 +49,27 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 ASGI_APPLICATION = "config.asgi.application"
 
-DB_PATH = os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "reports.db"))
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": DB_PATH,
+_DATABASE_URL = os.getenv("DATABASE_URL")
+if _DATABASE_URL:
+    from urllib.parse import urlparse
+    _db = urlparse(_DATABASE_URL)
+    DATABASES = {"default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": _db.path.lstrip("/"),
+        "USER": _db.username,
+        "PASSWORD": _db.password,
+        "HOST": _db.hostname,
+        "PORT": str(_db.port or 5432),
+        "CONN_MAX_AGE": 0,
+    }}
+else:
+    DB_PATH = os.getenv("DB_PATH", str(PROJECT_ROOT / "data" / "reports.db"))
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": DB_PATH,
+        }
     }
-}
 
 LANGUAGE_CODE = "ko-kr"
 TIME_ZONE = "Asia/Seoul"
